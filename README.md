@@ -17,7 +17,7 @@ risk sizing, paper execution, and post-signal tracking.
 - Exactly one result per requested day, with symbol order as the stable tie-break.
 - An explicit `NoEligibleStockError` when no stock qualifies.
 
-The original phase-one selector in `selector.py` is unchanged in phase 2.
+The original phase-one selector in `selector.py` is unchanged in phases 2 and 3.
 
 ### Phase 2 — risk and paper trading
 
@@ -36,6 +36,23 @@ The original phase-one selector in `selector.py` is unchanged in phase 2.
 - `PaperTradingWorkflow` connects an existing phase-one `Selection` to sizing,
   execution, and tracking without changing selection logic.
 
+### Phase 3 — causal historical backtesting
+
+- Event-driven daily simulation: T close signal, T+1 open or VWAP execution.
+- A monotonic simulated clock rejects every future-date data request.
+- Signals receive only current-close and prior data through the original selector API.
+- Position sizing for open execution uses the T+1 open; VWAP mode fixes quantity
+  from the T close before applying the next session's simulated VWAP fill.
+- T+1 exits, price-limit locks, costs, slippage, stop loss, take profit, and
+  maximum holding period.
+- Total trades, win rate, payoff ratio, average win/loss, maximum losing streak,
+  drawdown, annualized return, and monthly returns.
+- CSI 300 and CSI 1000 benchmark comparison when those series are supplied.
+- Bull, bear, and sideways results classified only from trailing benchmark data.
+- Independent training, validation, and out-of-sample windows with frozen settings.
+- JSON/CSV/SVG reports containing the equity curve, events, trades and reasons,
+  monthly returns, and the largest winning and losing trades.
+
 ## Project layout
 
 ```text
@@ -47,6 +64,11 @@ src/stock_picker/
   trading.py    virtual account, broker, costs, T+1, and ledgers
   tracking.py   signal/fill and 1/3/5-day performance tracking
   workflow.py   composition layer from candidate to simulated fill
+  historical.py guarded OHLCV and benchmark history portal
+  backtest.py   event engine and causal execution rules
+  analytics.py performance, regimes, benchmarks, and walk-forward validation
+  reporting.py portable JSON, CSV, and SVG reports
+  backtest_demo.py deterministic synthetic end-to-end demonstration
 tests/          unit and integration tests
 ```
 
@@ -128,6 +150,62 @@ from stock_picker import JsonLinesTradeLedger
 ledger = JsonLinesTradeLedger("data/trades.jsonl")
 broker = PaperBroker(account, ledger=ledger, risk_manager=risk)
 ```
+
+## Causality contract
+
+The historical portal starts without a clock. The backtester advances it exactly
+once per simulated session, and the portal raises `FutureDataError` for any date
+later than that clock. At the T close event, `StockSelector` receives a `DailyBar`
+snapshot containing T close/volume and the prior close. The resulting order is
+queued for T+1; no T+1 high, low, close, or VWAP can alter the signal.
+
+Open-mode quantity is calculated when the T+1 open becomes available. In VWAP
+mode the quantity is fixed using the known T close and the next day's VWAP is used
+only as the execution benchmark. A position acquired on T+1 cannot exit until a
+later session. If stop and take-profit are both touched in one daily bar, the
+backtester conservatively gives stop loss priority.
+
+## Run the backtest demonstration
+
+PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m stock_picker.backtest_demo
+```
+
+macOS or Linux:
+
+```bash
+PYTHONPATH=src python -m stock_picker.backtest_demo
+```
+
+This creates four report directories under `outputs/phase3_demo`: full period,
+training, validation, and out-of-sample. Each contains:
+
+```text
+summary.json         required statistics, benchmarks, regimes, extreme trades
+equity_curve.csv     daily equity, cash, exposure, regime, and benchmark closes
+equity_curve.svg     portable equity chart
+trades.csv           completed trades and entry/exit reasons
+events.csv           signals, fills, rejections, exits, and reasons
+monthly_returns.csv  monthly strategy returns
+```
+
+The bundled demonstration uses deterministic synthetic data only. Its output is
+for testing the framework and report pipeline, not for evaluating investment
+performance. For real testing, create `HistoricalBar` rows from point-in-time
+adjusted OHLCV data and `BenchmarkPoint` rows named `CSI300` and `CSI1000`, then
+pass them to `InMemoryHistoricalData`. Suspension and daily price-limit flags must
+reflect what was known for each historical session.
+
+## Walk-forward validation
+
+`WalkForwardValidator` accepts a non-overlapping `WalkForwardSplit` containing
+training, validation, and out-of-sample date windows. Each period starts with a
+fresh account and risk state, while selector, risk, and execution settings remain
+frozen. Parameter selection should occur using training/validation output only;
+the out-of-sample period should be run once after settings are locked.
 
 ## Run all tests
 
