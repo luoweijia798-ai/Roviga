@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -51,6 +52,21 @@ class DataManifest:
     symbol_count: int
     bar_count: int
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolSyncStatus:
+    symbol: str
+    provider: str
+    status: str
+    requested_start: date
+    requested_end: date
+    synced_through: date | None = None
+    bar_count: int = 0
+    attempts: int = 0
+    source: str = ""
+    last_error: str | None = None
+    updated_at: str = ""
 
 
 class RealMarketAdapter(Protocol):
@@ -217,6 +233,75 @@ class SQLiteMarketCache:
             ).fetchone()
         return date.fromisoformat(row[0]) if row and row[0] else None
 
+    def save_sync_status(self, status: SymbolSyncStatus) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO symbol_sync_status (
+                    symbol, provider, status, requested_start, requested_end,
+                    synced_through, bar_count, attempts, source, last_error,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    status.symbol,
+                    status.provider,
+                    status.status,
+                    status.requested_start.isoformat(),
+                    status.requested_end.isoformat(),
+                    _iso(status.synced_through),
+                    status.bar_count,
+                    status.attempts,
+                    status.source,
+                    status.last_error,
+                    status.updated_at or datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def sync_statuses(self) -> tuple[SymbolSyncStatus, ...]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM symbol_sync_status ORDER BY symbol"
+            ).fetchall()
+        return tuple(
+            SymbolSyncStatus(
+                symbol=row["symbol"],
+                provider=row["provider"],
+                status=row["status"],
+                requested_start=date.fromisoformat(row["requested_start"]),
+                requested_end=date.fromisoformat(row["requested_end"]),
+                synced_through=date.fromisoformat(row["synced_through"])
+                if row["synced_through"] else None,
+                bar_count=int(row["bar_count"]),
+                attempts=int(row["attempts"]),
+                source=row["source"],
+                last_error=row["last_error"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        )
+
+    def symbol_bar_count(self, symbol: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM bars WHERE symbol=?", (symbol,)
+            ).fetchone()
+        return int(row[0])
+
+    def save_audit(self, payload: dict[str, object]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES ('data_audit', ?)",
+                (json.dumps(payload, ensure_ascii=False),),
+            )
+
+    def load_audit(self) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key='data_audit'"
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def coverage(self) -> dict[str, object]:
         with self.connect() as connection:
             row = connection.execute(
@@ -303,6 +388,21 @@ class SQLiteMarketCache:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS symbol_sync_status (
+                    symbol TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    requested_start TEXT NOT NULL,
+                    requested_end TEXT NOT NULL,
+                    synced_through TEXT,
+                    bar_count INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT '',
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sync_status_state
+                    ON symbol_sync_status(status, symbol);
                 """
             )
 
@@ -510,6 +610,11 @@ class AkShareAdapter:
         symbol_limit: int | None = None,
         include_classifications: bool = True,
         history_source: str = "auto",
+        request_interval: float = 0.25,
+        max_attempts: int = 4,
+        retry_delay: float = 1.0,
+        segment_days: int = 366,
+        sleeper: Any = time.sleep,
     ) -> None:
         if history_source not in {"auto", "sina"}:
             raise ValueError("history_source must be 'auto' or 'sina'")
@@ -517,6 +622,18 @@ class AkShareAdapter:
         self.symbol_limit = symbol_limit
         self.include_classifications = include_classifications
         self.history_source = history_source
+        if request_interval < 0 or retry_delay < 0:
+            raise ValueError("request delays cannot be negative")
+        if max_attempts < 1 or segment_days < 1:
+            raise ValueError("max_attempts and segment_days must be positive")
+        self.request_interval = request_interval
+        self.max_attempts = max_attempts
+        self.retry_delay = retry_delay
+        self.segment_days = segment_days
+        self._sleep = sleeper
+        self._last_request_at: float | None = None
+        self._request_attempts = 0
+        self._last_history_source = ""
         self._eastmoney_history_available: bool | None = (
             False if history_source == "sina" else None
         )
@@ -533,6 +650,7 @@ class AkShareAdapter:
         if self.symbol_limit is not None:
             stocks = stocks[: self.symbol_limit]
         cache.upsert_stocks(stocks)
+        previous_statuses = {item.symbol: item for item in cache.sync_statuses()}
         new_bars = 0
         failed_symbols: list[str] = []
         warnings = [
@@ -548,16 +666,73 @@ class AkShareAdapter:
             latest = cache.latest_bar_date(stock.symbol)
             fetch_start = max(start_date, latest + timedelta(days=1)) if latest else start_date
             if fetch_start > end_date:
+                previous = previous_statuses.get(stock.symbol)
+                cache.save_sync_status(
+                    SymbolSyncStatus(
+                        stock.symbol, "AkShare", "complete", start_date, end_date,
+                        latest, cache.symbol_bar_count(stock.symbol),
+                        previous.attempts if previous else 0,
+                        previous.source if previous else "cache",
+                    )
+                )
                 continue
             pending.append((stock, fetch_start))
         completed = len(stocks) - len(pending)
         for stock, fetch_start in pending:
-            try:
-                bars = self._fetch_symbol_bars(ak, stock, fetch_start, end_date)
-            except Exception as error:
-                failed_symbols.append(f"{stock.symbol}:{type(error).__name__}")
-            else:
-                new_bars += cache.upsert_bars(bars)
+            request_attempt_start = self._request_attempts
+            failed = False
+            source = ""
+            cache.save_sync_status(
+                SymbolSyncStatus(
+                    stock.symbol, "AkShare", "running", start_date, end_date,
+                    cache.latest_bar_date(stock.symbol),
+                    cache.symbol_bar_count(stock.symbol),
+                )
+            )
+            for segment_start, segment_end in _date_segments(
+                fetch_start, end_date, self.segment_days
+            ):
+                try:
+                    bars = self._fetch_symbol_bars(
+                        ak, stock, segment_start, segment_end
+                    )
+                    source = self._last_history_source or source
+                    new_bars += cache.upsert_bars(bars)
+                    cache.save_sync_status(
+                        SymbolSyncStatus(
+                            stock.symbol, "AkShare", "running", start_date,
+                            end_date, segment_end,
+                            cache.symbol_bar_count(stock.symbol),
+                            self._request_attempts - request_attempt_start,
+                            source,
+                        )
+                    )
+                except Exception as error:
+                    failed = True
+                    failed_symbols.append(
+                        f"{stock.symbol}:{type(error).__name__}"
+                    )
+                    cache.save_sync_status(
+                        SymbolSyncStatus(
+                            stock.symbol, "AkShare", "failed", start_date,
+                            end_date, cache.latest_bar_date(stock.symbol),
+                            cache.symbol_bar_count(stock.symbol),
+                            self._request_attempts - request_attempt_start,
+                            source, f"{type(error).__name__}: {error}",
+                        )
+                    )
+                    break
+            if not failed:
+                total_bars = cache.symbol_bar_count(stock.symbol)
+                final_status = "complete" if total_bars else "unavailable"
+                cache.save_sync_status(
+                    SymbolSyncStatus(
+                        stock.symbol, "AkShare", final_status, start_date,
+                        end_date, end_date if total_bars else None, total_bars,
+                        self._request_attempts - request_attempt_start, source,
+                        "provider returned no rows" if not total_bars else None,
+                    )
+                )
             completed += 1
             if completed % 50 == 0 or completed == len(stocks):
                 print(
@@ -605,7 +780,7 @@ class AkShareAdapter:
         if history_function is not None:
             try:
                 cache.upsert_classifications(
-                    self._industry_history_records(history_function())
+                    self._industry_history_records(self._request(history_function))
                 )
             except Exception as error:
                 failures.append(f"industry_history:{type(error).__name__}")
@@ -628,7 +803,7 @@ class AkShareAdapter:
                 failures.append(f"{classification_type}:unsupported")
                 continue
             try:
-                names_frame = names_function()
+                names_frame = self._request(names_function)
                 name_column = _column(
                     names_frame, "板块名称", "概念名称", "行业名称", "name"
                 )
@@ -637,7 +812,7 @@ class AkShareAdapter:
                 continue
             for name in names_frame[name_column].astype(str).tolist():
                 try:
-                    members = members_function(symbol=name)
+                    members = self._request(members_function, symbol=name)
                     code_column = _column(
                         members, "代码", "证券代码", "股票代码", "code"
                     )
@@ -703,7 +878,7 @@ class AkShareAdapter:
         return ak
 
     def _stock_universe(self, ak: Any) -> list[StockInfo]:
-        frame = ak.stock_info_a_code_name()
+        frame = self._request(ak.stock_info_a_code_name)
         stocks = {
             str(row[_column(frame, "code", "证券代码", "股票代码")]).zfill(6): StockInfo(
                 symbol=str(row[_column(frame, "code", "证券代码", "股票代码")]).zfill(6),
@@ -730,7 +905,7 @@ class AkShareAdapter:
             if function is None:
                 continue
             try:
-                delisted = function(symbol=argument)
+                delisted = self._request(function, symbol=argument)
             except Exception:
                 continue
             for _, row in delisted.iterrows():
@@ -830,18 +1005,20 @@ class AkShareAdapter:
         eastmoney_error: Exception | None = None
         if self._eastmoney_history_available is not False:
             try:
-                raw = _call_with_optional_timeout(
+                raw = self._request(
                     ak.stock_zh_a_hist, **arguments, adjust=""
                 )
-                adjusted = _call_with_optional_timeout(
+                adjusted = self._request(
                     ak.stock_zh_a_hist, **arguments, adjust="hfq"
                 )
                 self._eastmoney_history_available = True
+                self._last_history_source = "AkShare.Eastmoney"
                 # Eastmoney reports volume in lots; the project stores shares.
                 return raw, adjusted, 100
             except Exception as error:
                 eastmoney_error = error
-                self._eastmoney_history_available = False
+                # Keep probing Eastmoney on later symbols/segments. Transient
+                # throttling must not permanently switch a full sync to fallback.
         sina_function = getattr(ak, "stock_zh_a_daily", None)
         if sina_function is None:
             if eastmoney_error is not None:
@@ -855,10 +1032,31 @@ class AkShareAdapter:
             "start_date": arguments["start_date"],
             "end_date": arguments["end_date"],
         }
-        raw = sina_function(**sina_arguments, adjust="")
-        adjusted = sina_function(**sina_arguments, adjust="hfq")
+        raw = self._request(sina_function, **sina_arguments, adjust="")
+        adjusted = self._request(sina_function, **sina_arguments, adjust="hfq")
+        self._last_history_source = "AkShare.Sina"
         # Sina reports volume in shares.
         return raw, adjusted, 1
+
+    def _request(self, function: Any, **arguments: str) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            self._request_attempts += 1
+            if self._last_request_at is not None and self.request_interval:
+                elapsed = time.monotonic() - self._last_request_at
+                if elapsed < self.request_interval:
+                    self._sleep(self.request_interval - elapsed)
+            try:
+                result = _call_with_optional_timeout(function, **arguments)
+                self._last_request_at = time.monotonic()
+                return result
+            except Exception as error:
+                self._last_request_at = time.monotonic()
+                last_error = error
+                if attempt < self.max_attempts:
+                    self._sleep(self.retry_delay * (2 ** (attempt - 1)))
+        assert last_error is not None
+        raise last_error
 
     def _fetch_benchmark(
         self,
@@ -871,7 +1069,8 @@ class AkShareAdapter:
         try:
             if self._eastmoney_history_available is False:
                 raise RuntimeError("Eastmoney history circuit is open")
-            frame = ak.stock_zh_index_daily_em(
+            frame = self._request(
+                ak.stock_zh_index_daily_em,
                 symbol=symbol,
                 start_date=start_date.strftime("%Y%m%d"),
                 end_date=end_date.strftime("%Y%m%d"),
@@ -881,7 +1080,7 @@ class AkShareAdapter:
             if sina_function is None:
                 raise eastmoney_error
             sina_symbol = "sh000852" if symbol == "csi000852" else symbol
-            frame = sina_function(symbol=sina_symbol)
+            frame = self._request(sina_function, symbol=sina_symbol)
             date_column = _column(frame, "date", "日期")
             frame = frame[
                 frame[date_column].map(
@@ -997,6 +1196,22 @@ class TushareAdapter:
                     _as_date(str(row["trade_date"])), name, float(row["close"])
                 )
                 for _, row in frame.iterrows()
+            )
+        for stock in stocks:
+            latest = cache.latest_bar_date(stock.symbol)
+            count = cache.symbol_bar_count(stock.symbol)
+            cache.save_sync_status(
+                SymbolSyncStatus(
+                    stock.symbol,
+                    "Tushare",
+                    "complete" if count else "unavailable",
+                    start_date,
+                    end_date,
+                    latest,
+                    count,
+                    source="Tushare.daily",
+                    last_error=None if count else "provider returned no rows",
+                )
             )
         coverage = cache.coverage()
         manifest = DataManifest(
@@ -1172,3 +1387,13 @@ def _optional_date(value: Any) -> date | None:
 
 def _iso(value: date | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def _date_segments(
+    start_date: date, end_date: date, segment_days: int
+) -> Iterable[tuple[date, date]]:
+    cursor = start_date
+    while cursor <= end_date:
+        segment_end = min(end_date, cursor + timedelta(days=segment_days - 1))
+        yield cursor, segment_end
+        cursor = segment_end + timedelta(days=1)

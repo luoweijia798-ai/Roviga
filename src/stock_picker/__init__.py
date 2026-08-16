@@ -23,6 +23,7 @@ from .backtest import (
     MarketRegime,
 )
 from .data import InMemoryMarketData, MarketDataSource
+from .data_audit import DataAuditResult, RealMarketDataAuditor
 from .historical import (
     BenchmarkPoint,
     FutureDataError,
@@ -46,6 +47,7 @@ from .real_market import (
     SQLiteHistoricalDataPortal,
     SQLiteMarketCache,
     StockInfo,
+    SymbolSyncStatus,
     TushareAdapter,
 )
 from .reporting import BacktestReportWriter
@@ -121,13 +123,16 @@ __all__ = [
     "ClassificationRecord",
     "DataCoverageError",
     "DataManifest",
+    "DataAuditResult",
     "PHASE4_START",
     "Phase4FoundationResult",
     "Phase4FoundationRunner",
     "RealMarketAdapter",
+    "RealMarketDataAuditor",
     "SQLiteHistoricalData",
     "SQLiteHistoricalDataPortal",
     "SQLiteMarketCache",
     "StockInfo",
+    "SymbolSyncStatus",
     "TushareAdapter",
 ]

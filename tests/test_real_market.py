@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import tempfile
+import shutil
 import unittest
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 try:
     import pandas as pd
@@ -17,12 +19,23 @@ from stock_picker import (
     HistoricalBar,
     PHASE4_START,
     Phase4FoundationRunner,
+    RealMarketDataAuditor,
     SQLiteMarketCache,
     TushareAdapter,
 )
 
 
 END = date(2015, 6, 4)
+
+
+@contextmanager
+def _test_directory():
+    root = Path("data/test-runs") / uuid4().hex
+    root.mkdir(parents=True)
+    try:
+        yield str(root)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 class _FakeAkShare:
@@ -118,6 +131,21 @@ class _FakeSinaFallback(_FakeAkShare):
         )
 
 
+class _FlakyAkShare(_FakeAkShare):
+    def __init__(self) -> None:
+        self.failures_remaining = 2
+        self.requested_ranges: list[tuple[str, str, str]] = []
+
+    def stock_zh_a_hist(self, **arguments: str) -> pd.DataFrame:
+        self.requested_ranges.append(
+            (arguments["start_date"], arguments["end_date"], arguments["adjust"])
+        )
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise ConnectionError("temporary throttle")
+        return super().stock_zh_a_hist(**arguments)
+
+
 class _FakeTushare:
     def stock_basic(self, **_: object) -> pd.DataFrame:
         return pd.DataFrame(
@@ -167,7 +195,7 @@ class _FakeTushare:
 
 class SQLiteCausalDataTests(unittest.TestCase):
     def test_round_trip_preserves_prices_limits_and_classification_time(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
             cache.upsert_bars(
                 [
@@ -218,9 +246,11 @@ class SQLiteCausalDataTests(unittest.TestCase):
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
     def test_offline_client_maps_fields_and_is_incremental(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
-            adapter = AkShareAdapter(ak_module=_FakeAkShare())
+            adapter = AkShareAdapter(
+                ak_module=_FakeAkShare(), request_interval=0, retry_delay=0
+            )
 
             first = adapter.sync(cache, PHASE4_START, END)
             second = adapter.sync(cache, PHASE4_START, END)
@@ -239,11 +269,13 @@ class AkShareAdapterTests(unittest.TestCase):
             self.assertAlmostEqual(bar.vwap or 0, 10.2)
 
     def test_sina_fallback_preserves_share_units_and_benchmarks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
             manifest = AkShareAdapter(
                 ak_module=_FakeSinaFallback(),
                 include_classifications=False,
+                request_interval=0,
+                retry_delay=0,
             ).sync(cache, PHASE4_START, END)
             portal = cache.as_historical_data().portal()
             portal.advance_to(PHASE4_START)
@@ -260,12 +292,45 @@ class AkShareAdapterTests(unittest.TestCase):
                 {"CSI300", "CSI1000"},
             )
 
+    def test_retry_segments_status_and_completed_symbol_skip(self) -> None:
+        with _test_directory() as directory:
+            cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
+            client = _FlakyAkShare()
+            adapter = AkShareAdapter(
+                ak_module=client,
+                include_classifications=False,
+                request_interval=0,
+                retry_delay=0,
+                segment_days=2,
+            )
+
+            adapter.sync(cache, PHASE4_START, END)
+            requests_after_first_sync = len(client.requested_ranges)
+            adapter.sync(cache, PHASE4_START, END)
+            status = cache.sync_statuses()[0]
+
+            self.assertEqual(status.status, "complete")
+            self.assertEqual(status.synced_through, END)
+            self.assertEqual(status.bar_count, 4)
+            self.assertGreaterEqual(status.attempts, 6)
+            self.assertEqual(len(client.requested_ranges), requests_after_first_sync)
+            successful_ranges = {
+                (start, end) for start, end, _ in client.requested_ranges
+            }
+            self.assertIn(("20150601", "20150602"), successful_ranges)
+            self.assertIn(("20150603", "20150604"), successful_ranges)
+
     def test_foundation_runner_uses_sqlite_and_writes_data_audit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _test_directory() as directory:
             root = Path(directory)
             cache = SQLiteMarketCache(root / "market.sqlite")
-            AkShareAdapter(ak_module=_FakeAkShare()).sync(
+            AkShareAdapter(
+                ak_module=_FakeAkShare(), request_interval=0, retry_delay=0
+            ).sync(
                 cache, PHASE4_START, END
+            )
+            audit = RealMarketDataAuditor(cache).run(
+                start_date=PHASE4_START, end_date=END
             )
 
             result = Phase4FoundationRunner(cache.path).run(
@@ -274,6 +339,7 @@ class AkShareAdapterTests(unittest.TestCase):
 
             self.assertEqual(result.backtest.start_date, PHASE4_START)
             self.assertEqual(result.backtest.end_date, END)
+            self.assertTrue(audit.passed)
             self.assertTrue((result.report_directory / "data_manifest.json").exists())
             self.assertTrue((result.report_directory / "data_coverage.json").exists())
 
@@ -281,7 +347,7 @@ class AkShareAdapterTests(unittest.TestCase):
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class TushareAdapterTests(unittest.TestCase):
     def test_exact_limits_adjustment_and_volume_units(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
             TushareAdapter(pro_client=_FakeTushare()).sync(
                 cache, PHASE4_START, PHASE4_START

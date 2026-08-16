@@ -250,6 +250,37 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m stock_picker.phase4_foundation status
 ```
 
+The AkShare path rate-limits every provider request, retries transient failures
+with exponential backoff, and downloads each symbol in bounded date segments.
+Every completed segment is committed immediately. A `symbol_sync_status` ledger
+records the provider, underlying endpoint, attempt count, last completed date,
+and failure reason per stock; rerunning `sync` skips symbols already complete
+through the requested end date. Defaults can be tuned without changing code:
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation sync `
+  --provider akshare --request-interval 0.5 --max-attempts 5 `
+  --retry-delay 2 --segment-days 366
+```
+
+AkShare/Eastmoney remains the primary source. If an Eastmoney history request
+still fails after retries, the adapter attempts AkShare's Sina endpoint and
+records the actual source used. Tushare remains an optional authenticated path
+for exact limits and coverage that the public endpoints cannot supply.
+
+After synchronization, generate the independent data audit. This command does
+not run a strategy or calculate returns:
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation audit
+```
+
+The JSON audit reports stock and exchange counts, database and benchmark date
+coverage, per-stock missing trading-session ranges, invalid OHLCV rows, source
+coverage, and incomplete/failed symbols. A failed audit exits with status 2.
+The `backtest` command refuses to run unless the saved audit passed and matches
+the current sync manifest, so any subsequent data update requires a new audit.
+
 Industry/concept snapshots add many provider requests. They are enabled by
 default; use `--skip-classifications` only when downloading price data first,
 then run a later full sync to add classifications.
@@ -262,7 +293,7 @@ $env:TUSHARE_TOKEN = "your-token"
 .\.venv\Scripts\python.exe -m stock_picker.phase4_foundation sync --provider tushare
 ```
 
-After `status` confirms coverage, run the original-strategy foundation backtest:
+Only after `audit` passes, run the original-strategy foundation backtest:
 
 ```powershell
 .\.venv\Scripts\python.exe -m stock_picker.phase4_foundation backtest
