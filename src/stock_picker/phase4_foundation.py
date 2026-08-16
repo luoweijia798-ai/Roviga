@@ -131,6 +131,9 @@ def main() -> None:
     parser.add_argument("--end", type=date.fromisoformat, default=date.today())
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--symbol-limit", type=int)
+    parser.add_argument(
+        "--history-source", choices=("auto", "sina"), default="auto"
+    )
     parser.add_argument("--skip-classifications", action="store_true")
     args = parser.parse_args()
 
@@ -140,6 +143,7 @@ def main() -> None:
             AkShareAdapter(
                 symbol_limit=args.symbol_limit,
                 include_classifications=not args.skip_classifications,
+                history_source=args.history_source,
             )
             if args.provider == "akshare"
             else TushareAdapter()

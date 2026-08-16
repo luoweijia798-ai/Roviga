@@ -85,6 +85,39 @@ class _FakeAkShare:
         return pd.DataFrame([{"代码": "000001"}])
 
 
+class _FakeSinaFallback(_FakeAkShare):
+    def stock_zh_a_hist(self, **_: object) -> pd.DataFrame:
+        raise ConnectionError("Eastmoney unavailable")
+
+    def stock_zh_a_daily(
+        self, *, symbol: str, start_date: str, end_date: str, adjust: str
+    ) -> pd.DataFrame:
+        offset = 1.0 if adjust == "hfq" else 0.0
+        return pd.DataFrame(
+            [
+                {
+                    "date": f"2015-06-0{index}",
+                    "open": 10.0 + offset,
+                    "high": 10.4 + offset,
+                    "low": 9.9 + offset,
+                    "close": 10.2 + offset,
+                    "volume": 100_000,
+                    "amount": 1_020_000,
+                }
+                for index in range(1, 5)
+            ]
+        )
+
+    def stock_zh_index_daily(self, *, symbol: str) -> pd.DataFrame:
+        base = 4_000 if symbol == "sh000300" else 6_000
+        return pd.DataFrame(
+            [
+                {"date": f"2015-06-0{index}", "close": base + index}
+                for index in range(1, 5)
+            ]
+        )
+
+
 class _FakeTushare:
     def stock_basic(self, **_: object) -> pd.DataFrame:
         return pd.DataFrame(
@@ -201,8 +234,31 @@ class AkShareAdapterTests(unittest.TestCase):
             self.assertIsNotNone(bar)
             assert bar is not None
             self.assertEqual(bar.amount, 1_020_000)
+            self.assertEqual(bar.volume, 100_000)
             self.assertEqual(bar.causal_close, 11.3)
             self.assertAlmostEqual(bar.vwap or 0, 10.2)
+
+    def test_sina_fallback_preserves_share_units_and_benchmarks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
+            manifest = AkShareAdapter(
+                ak_module=_FakeSinaFallback(),
+                include_classifications=False,
+            ).sync(cache, PHASE4_START, END)
+            portal = cache.as_historical_data().portal()
+            portal.advance_to(PHASE4_START)
+            bar = portal.bar("000001", PHASE4_START)
+
+            self.assertEqual(manifest.bar_count, 4)
+            self.assertIsNotNone(bar)
+            assert bar is not None
+            self.assertEqual(bar.volume, 100_000)
+            self.assertAlmostEqual(bar.vwap or 0, 10.2)
+            self.assertEqual(bar.causal_close, 11.2)
+            self.assertEqual(
+                set(cache.as_historical_data().benchmark_names),
+                {"CSI300", "CSI1000"},
+            )
 
     def test_foundation_runner_uses_sqlite_and_writes_data_audit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

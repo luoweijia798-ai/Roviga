@@ -509,10 +509,17 @@ class AkShareAdapter:
         ak_module: Any | None = None,
         symbol_limit: int | None = None,
         include_classifications: bool = True,
+        history_source: str = "auto",
     ) -> None:
+        if history_source not in {"auto", "sina"}:
+            raise ValueError("history_source must be 'auto' or 'sina'")
         self._ak = ak_module
         self.symbol_limit = symbol_limit
         self.include_classifications = include_classifications
+        self.history_source = history_source
+        self._eastmoney_history_available: bool | None = (
+            False if history_source == "sina" else None
+        )
 
     def sync(
         self,
@@ -533,18 +540,31 @@ class AkShareAdapter:
             "exposed before their fetch date.",
             "Daily price limits are inferred when an exact point-in-time limit "
             "series is unavailable; use Tushare stk_limit for exact limits.",
+            "AkShare Eastmoney daily history is preferred; the AkShare Sina "
+            "history endpoint is used automatically when Eastmoney is unavailable.",
         ]
+        pending: list[tuple[StockInfo, date]] = []
         for stock in stocks:
             latest = cache.latest_bar_date(stock.symbol)
             fetch_start = max(start_date, latest + timedelta(days=1)) if latest else start_date
             if fetch_start > end_date:
                 continue
+            pending.append((stock, fetch_start))
+        completed = len(stocks) - len(pending)
+        for stock, fetch_start in pending:
             try:
                 bars = self._fetch_symbol_bars(ak, stock, fetch_start, end_date)
             except Exception as error:
                 failed_symbols.append(f"{stock.symbol}:{type(error).__name__}")
-                continue
-            new_bars += cache.upsert_bars(bars)
+            else:
+                new_bars += cache.upsert_bars(bars)
+            completed += 1
+            if completed % 50 == 0 or completed == len(stocks):
+                print(
+                    f"market sync {completed}/{len(stocks)} symbols "
+                    f"bars_written={new_bars} failures={len(failed_symbols)}",
+                    flush=True,
+                )
         cache.upsert_benchmarks(
             self._fetch_benchmark(ak, "CSI300", "sh000300", start_date, end_date)
         )
@@ -740,8 +760,9 @@ class AkShareAdapter:
             "start_date": start_date.strftime("%Y%m%d"),
             "end_date": end_date.strftime("%Y%m%d"),
         }
-        raw = ak.stock_zh_a_hist(**arguments, adjust="")
-        adjusted = ak.stock_zh_a_hist(**arguments, adjust="hfq")
+        raw, adjusted, volume_multiplier = self._fetch_history_frames(
+            ak, stock, arguments
+        )
         if raw.empty:
             return ()
         adjusted_by_date = {
@@ -757,7 +778,9 @@ class AkShareAdapter:
             close = float(row[_column(raw, "收盘", "close")])
             high = float(row[_column(raw, "最高", "high")])
             low = float(row[_column(raw, "最低", "low")])
-            volume = int(float(row[_column(raw, "成交量", "volume")]))
+            volume = int(
+                float(row[_column(raw, "成交量", "volume")]) * volume_multiplier
+            )
             amount_column = _optional_column(raw, "成交额", "amount")
             amount = float(row[amount_column]) if amount_column else 0.0
             up_limit, down_limit = _infer_limits(
@@ -782,7 +805,7 @@ class AkShareAdapter:
                     low=low,
                     close=close,
                     volume=volume,
-                    vwap=amount / (volume * 100) if volume and amount else None,
+                    vwap=amount / volume if volume and amount else None,
                     tradable=volume > 0,
                     limit_up_locked=locked_up,
                     limit_down_locked=locked_down,
@@ -798,6 +821,45 @@ class AkShareAdapter:
             previous_close = close
         return tuple(bars)
 
+    def _fetch_history_frames(
+        self,
+        ak: Any,
+        stock: StockInfo,
+        arguments: dict[str, str],
+    ) -> tuple[Any, Any, int]:
+        eastmoney_error: Exception | None = None
+        if self._eastmoney_history_available is not False:
+            try:
+                raw = _call_with_optional_timeout(
+                    ak.stock_zh_a_hist, **arguments, adjust=""
+                )
+                adjusted = _call_with_optional_timeout(
+                    ak.stock_zh_a_hist, **arguments, adjust="hfq"
+                )
+                self._eastmoney_history_available = True
+                # Eastmoney reports volume in lots; the project stores shares.
+                return raw, adjusted, 100
+            except Exception as error:
+                eastmoney_error = error
+                self._eastmoney_history_available = False
+        sina_function = getattr(ak, "stock_zh_a_daily", None)
+        if sina_function is None:
+            if eastmoney_error is not None:
+                raise eastmoney_error
+            raise RuntimeError("no AkShare daily-history endpoint is available")
+        prefix = "sh" if stock.symbol.startswith("6") else "sz"
+        if stock.symbol.startswith(("4", "8")):
+            prefix = "bj"
+        sina_arguments = {
+            "symbol": f"{prefix}{stock.symbol}",
+            "start_date": arguments["start_date"],
+            "end_date": arguments["end_date"],
+        }
+        raw = sina_function(**sina_arguments, adjust="")
+        adjusted = sina_function(**sina_arguments, adjust="hfq")
+        # Sina reports volume in shares.
+        return raw, adjusted, 1
+
     def _fetch_benchmark(
         self,
         ak: Any,
@@ -806,11 +868,26 @@ class AkShareAdapter:
         start_date: date,
         end_date: date,
     ) -> tuple[BenchmarkPoint, ...]:
-        frame = ak.stock_zh_index_daily_em(
-            symbol=symbol,
-            start_date=start_date.strftime("%Y%m%d"),
-            end_date=end_date.strftime("%Y%m%d"),
-        )
+        try:
+            if self._eastmoney_history_available is False:
+                raise RuntimeError("Eastmoney history circuit is open")
+            frame = ak.stock_zh_index_daily_em(
+                symbol=symbol,
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+            )
+        except Exception as eastmoney_error:
+            sina_function = getattr(ak, "stock_zh_index_daily", None)
+            if sina_function is None:
+                raise eastmoney_error
+            sina_symbol = "sh000852" if symbol == "csi000852" else symbol
+            frame = sina_function(symbol=sina_symbol)
+            date_column = _column(frame, "date", "日期")
+            frame = frame[
+                frame[date_column].map(
+                    lambda value: start_date <= _as_date(value) <= end_date
+                )
+            ]
         return tuple(
             BenchmarkPoint(
                 _as_date(row[_column(frame, "date", "日期")]),
@@ -999,6 +1076,15 @@ def _row_to_bar(row: sqlite3.Row) -> HistoricalBar:
         if row["signal_close"] is not None
         else None,
     )
+
+
+def _call_with_optional_timeout(function: Any, **arguments: str) -> Any:
+    try:
+        return function(**arguments, timeout=20)
+    except TypeError as error:
+        if "timeout" not in str(error):
+            raise
+        return function(**arguments)
 
 
 def _column(frame: Any, *names: str) -> str:

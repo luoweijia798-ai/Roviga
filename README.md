@@ -55,6 +55,9 @@ The original phase-one selector in `selector.py` is unchanged in phases 2 and 3.
 
 ### Phase 4, part 1 — real A-share data foundation
 
+Current synchronization status and the safe continuation point are recorded in
+[`PHASE4_STATUS.md`](PHASE4_STATUS.md).
+
 - A fixed research start date of `2015-06-01`; the end date defaults to today.
 - AkShare-first adapter and an optional token-based Tushare adapter.
 - Daily OHLC, volume, amount, raw execution prices, causal adjusted signal
