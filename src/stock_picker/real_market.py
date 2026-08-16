@@ -1299,7 +1299,29 @@ def _call_with_optional_timeout(function: Any, **arguments: str) -> Any:
     except TypeError as error:
         if "timeout" not in str(error):
             raise
+        return _call_with_requests_timeout(function, **arguments)
+
+
+def _call_with_requests_timeout(function: Any, **arguments: str) -> Any:
+    """Apply a timeout to provider functions that hide requests internally."""
+
+    try:
+        import requests
+    except ImportError:
         return function(**arguments)
+    original = requests.sessions.Session.request
+
+    def request_with_timeout(
+        session: Any, method: str, url: str, **request_arguments: Any
+    ) -> Any:
+        request_arguments.setdefault("timeout", 20)
+        return original(session, method, url, **request_arguments)
+
+    requests.sessions.Session.request = request_with_timeout
+    try:
+        return function(**arguments)
+    finally:
+        requests.sessions.Session.request = original
 
 
 def _column(frame: Any, *names: str) -> str:

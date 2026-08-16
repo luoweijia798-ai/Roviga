@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
+from unittest.mock import patch
 
 try:
     import pandas as pd
@@ -245,6 +246,28 @@ class SQLiteCausalDataTests(unittest.TestCase):
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
+    def test_hidden_requests_call_receives_default_timeout(self) -> None:
+        import requests
+
+        observed: dict[str, object] = {}
+
+        def provider() -> object:
+            return requests.get("https://provider.invalid/test")
+
+        def fake_request(
+            _session: object, _method: str, _url: str, **arguments: object
+        ) -> object:
+            observed.update(arguments)
+            return object()
+
+        adapter = AkShareAdapter(
+            ak_module=_FakeAkShare(), request_interval=0, retry_delay=0
+        )
+        with patch("requests.sessions.Session.request", new=fake_request):
+            adapter._request(provider)
+
+        self.assertEqual(observed["timeout"], 20)
+
     def test_offline_client_maps_fields_and_is_incremental(self) -> None:
         with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")

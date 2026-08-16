@@ -1,5 +1,8 @@
-# Reproducible optional real-market data environment (Python 3.11+)
-akshare==1.18.91
+# Real-market data environment (Python 3.11+).
+# The compatible range permits stable patch updates; the constraints file pins
+# the version verified by this project for reproducible installs.
+-c requirements-market-constraints.txt
+akshare>=1.18.91,<1.19
 
 # Optional alternative provider; uncomment when a Tushare token is available.
 # tushare>=1.4

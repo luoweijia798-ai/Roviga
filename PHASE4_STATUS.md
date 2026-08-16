@@ -31,18 +31,25 @@ Checkpoint date: 2026-08-17
     compressed missing-session ranges per stock, invalid rows, and sources;
   - the real backtest is now hard-gated on a passing audit tied to the current
     sync manifest.
+- The market environment was rebuilt and verified with Python 3.12.13,
+  AkShare 1.18.91, and a fully pinned transitive constraint file. `pip check`
+  reports no broken requirements.
+- Provider functions that hide HTTP calls now receive a 20-second default at
+  the underlying Requests session, preventing unbounded waits.
 
 ## Data status (not committed)
 
-- The repository was restored on a new machine. Ignored runtime artifacts from
-  the prior checkpoint, including `data/a_share_201506_present.sqlite` and the
-  old `.venv`, were not present in Git and therefore were not restored.
-- This machine has not completed the 2015-06-01-to-present full-market sync or
-  produced a passing real-data audit. No audit result is claimed by this commit.
-- Installing the pinned AkShare package was attempted, but the available Python
-  package index exposed no matching AkShare distribution. Full live sync is
-  blocked until the market dependency can be installed from an accessible
-  package index or the prior ignored environment/cache is restored.
+- A new real-data sync is actively building
+  `data/a_share_201506_present.sqlite`; the database and environment remain
+  ignored runtime artifacts and are not committed.
+- The real universe currently contains 5,876 stock metadata records. At the
+  recorded checkpoint, `000001` was complete with 2,725 real daily bars from
+  2015-06-01 through the latest available session 2026-08-14, and `000002` had
+  started. The recorded bar source was AkShare/Sina after the primary
+  Eastmoney path exhausted its bounded retries.
+- The full-market sync is not complete and no passing data audit is claimed.
+  The background sync remains resumable, retains failures in the per-symbol
+  ledger, and does not delete existing rows.
 - All SQLite files, virtual environments, generated reports, and temporary
   outputs remain excluded by `.gitignore`.
 - No API key, token, credential, or real-market return result is stored in this
@@ -51,8 +58,9 @@ Checkpoint date: 2026-08-17
 ## Known blocker
 
 - The code now mitigates Eastmoney throttling with rate limiting, retries,
-  segmented requests, persistent progress, and fallback. This must still be
-  validated against the full real universe after AkShare becomes installable.
+  segmented requests, persistent progress, timeout enforcement, and fallback.
+  The live run confirms Sina fallback writes real daily bars, while full-universe
+  Eastmoney/Beijing/delisted coverage still requires completion and audit.
 - The Sina fallback works for ordinary listed Shanghai/Shenzhen stocks but did
   not cover several early delisted symbols and a Beijing Stock Exchange smoke
   test. It therefore cannot yet be treated as a complete full-market source.
@@ -64,10 +72,10 @@ Checkpoint date: 2026-08-17
 
 ## Next step
 
-1. Restore/install the pinned AkShare environment (or restore the prior ignored
-   `.venv` and SQLite cache).
-2. Run the resumable sync and complete stock bars, amount/volume,
+1. Allow the active resumable sync to complete stock bars, amount/volume,
    price limits, stock metadata, classifications, CSI 300, and CSI 1000.
+2. Rerun the same sync command until every retained failed/incomplete symbol has
+   either completed or has a documented unavailable-source disposition.
 3. Run and review the standalone data audit. Do not run the real backtest while any
    required-symbol or benchmark coverage failure remains.
 4. After the audit passes, run the unchanged baseline backtest and create the

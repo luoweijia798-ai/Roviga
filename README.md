@@ -241,6 +241,11 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-market.txt
 ```
 
+`requirements-market.txt` declares the supported stable AkShare range and loads
+`requirements-market-constraints.txt`, which pins the complete dependency graph
+verified by the project. The current lock was validated with Python 3.12.13 and
+AkShare 1.18.91; `python -m pip check` must report no broken requirements.
+
 Sync AkShare data from 2015-06-01 through today. The SQLite cache is updated per
 symbol, so a stopped download can be resumed with the same command:
 
