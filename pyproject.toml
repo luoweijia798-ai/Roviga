@@ -4,14 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daily-stock-picker"
-version = "0.3.0"
+version = "0.4.0"
 description = "Deterministic stock selection, paper trading, and causal backtesting."
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+market = ["akshare>=1.18.91; python_version >= '3.11'"]
+tushare = ["tushare>=1.4"]
+
 [project.scripts]
 daily-stock-picker = "stock_picker.example:main"
 daily-stock-backtest = "stock_picker.backtest_demo:main"
+daily-stock-real-market = "stock_picker.phase4_foundation:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

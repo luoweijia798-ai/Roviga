@@ -31,6 +31,23 @@ from .historical import (
     InMemoryHistoricalData,
 )
 from .models import DailyBar, Selection
+from .phase4_foundation import (
+    DataCoverageError,
+    Phase4FoundationResult,
+    Phase4FoundationRunner,
+)
+from .real_market import (
+    PHASE4_START,
+    AkShareAdapter,
+    ClassificationRecord,
+    DataManifest,
+    RealMarketAdapter,
+    SQLiteHistoricalData,
+    SQLiteHistoricalDataPortal,
+    SQLiteMarketCache,
+    StockInfo,
+    TushareAdapter,
+)
 from .reporting import BacktestReportWriter
 from .risk import PositionSizing, RiskConfig, RiskManager, RiskStatus
 from .selector import NoEligibleStockError, SelectionConfig, StockSelector
@@ -100,4 +117,17 @@ __all__ = [
     "WalkForwardSplit",
     "WalkForwardValidator",
     "analyze_backtest",
+    "AkShareAdapter",
+    "ClassificationRecord",
+    "DataCoverageError",
+    "DataManifest",
+    "PHASE4_START",
+    "Phase4FoundationResult",
+    "Phase4FoundationRunner",
+    "RealMarketAdapter",
+    "SQLiteHistoricalData",
+    "SQLiteHistoricalDataPortal",
+    "SQLiteMarketCache",
+    "StockInfo",
+    "TushareAdapter",
 ]

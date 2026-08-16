@@ -1,0 +1,5 @@
+# Reproducible optional real-market data environment (Python 3.11+)
+akshare==1.18.91
+
+# Optional alternative provider; uncomment when a Tushare token is available.
+# tushare>=1.4

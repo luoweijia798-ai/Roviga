@@ -53,6 +53,25 @@ The original phase-one selector in `selector.py` is unchanged in phases 2 and 3.
 - JSON/CSV/SVG reports containing the equity curve, events, trades and reasons,
   monthly returns, and the largest winning and losing trades.
 
+### Phase 4, part 1 — real A-share data foundation
+
+- A fixed research start date of `2015-06-01`; the end date defaults to today.
+- AkShare-first adapter and an optional token-based Tushare adapter.
+- Daily OHLC, volume, amount, raw execution prices, causal adjusted signal
+  prices, suspension state, price-limit levels, and one-price limit locks.
+- Current and delisted stock metadata to reduce survivorship bias.
+- Point-in-time industry history where the source exposes effective/update dates.
+- Current industry/concept snapshots are timestamped at download time and are
+  never exposed to earlier simulated dates.
+- A resumable SQLite cache rather than loading a decade of full-market rows into
+  memory.
+- A guarded SQLite portal with the same interface as the phase-3 in-memory data.
+- A foundation runner that executes the unchanged selector and risk modules from
+  `2015-06-01` and writes data-manifest/coverage audit files with the report.
+
+Phase 4 market filtering, parameter sensitivity, five-market-period analysis,
+and the final strategy report are deliberately outside part 1.
+
 ## Project layout
 
 ```text
@@ -69,6 +88,8 @@ src/stock_picker/
   analytics.py performance, regimes, benchmarks, and walk-forward validation
   reporting.py portable JSON, CSV, and SVG reports
   backtest_demo.py deterministic synthetic end-to-end demonstration
+  real_market.py AkShare/Tushare adapters and SQLite point-in-time cache
+  phase4_foundation.py real-data sync/status/foundation-backtest CLI
 tests/          unit and integration tests
 ```
 
@@ -206,6 +227,62 @@ training, validation, and out-of-sample date windows. Each period starts with a
 fresh account and risk state, while selector, risk, and execution settings remain
 frozen. Parameter selection should occur using training/validation output only;
 the out-of-sample period should be run once after settings are locked.
+
+## Real A-share data setup (phase 4, part 1)
+
+Create an isolated Python 3.11+ environment and install the pinned optional
+market dependency:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-market.txt
+```
+
+Sync AkShare data from 2015-06-01 through today. The SQLite cache is updated per
+symbol, so a stopped download can be resumed with the same command:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation sync --provider akshare
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation status
+```
+
+Industry/concept snapshots add many provider requests. They are enabled by
+default; use `--skip-classifications` only when downloading price data first,
+then run a later full sync to add classifications.
+
+Tushare is optional and requires its package, an account with the relevant API
+permissions, and a token supplied only through the environment:
+
+```powershell
+$env:TUSHARE_TOKEN = "your-token"
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation sync --provider tushare
+```
+
+After `status` confirms coverage, run the original-strategy foundation backtest:
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation backtest
+```
+
+The default cache is `data/a_share_201506_present.sqlite`; the default output is
+`phase4_real_market_report/foundation`. Both are ignored by Git because market
+data and generated reports are reproducible runtime artifacts.
+
+Data-quality rules:
+
+- AkShare raw prices drive simulated fills. HFQ prices drive signal features so
+  later corporate actions do not rewrite earlier signal history.
+- AkShare limit prices are inferred from the prior raw close and board rules when
+  no exact point-in-time series is available. Tushare `stk_limit` is the optional
+  exact-limit path.
+- Current concept membership is not historical membership. Its `available_from`
+  date prevents accidental use before download time.
+- No financial statement fields are fetched or exposed in part 1, so future
+  publication data cannot enter the strategy.
+- A sync manifest records provider, requested range, adjustment method, failures,
+  and warnings. Do not treat a report as real-market evidence until the manifest
+  and coverage audit show the intended period and universe.
 
 ## Run all tests
 

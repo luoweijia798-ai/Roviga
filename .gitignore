@@ -7,3 +7,7 @@ dist/
 build/
 data/*.jsonl
 outputs/
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+phase4_real_market_report/
