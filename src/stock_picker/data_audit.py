@@ -69,6 +69,8 @@ class RealMarketDataAuditor:
                       WHEN high < MAX(open, close) OR low > MIN(open, close)
                         OR high < low THEN 'invalid_ohlc'
                       WHEN volume < 0 OR amount < 0 THEN 'negative_volume_or_amount'
+                      WHEN amount > 0 AND volume > 0 AND vwap IS NULL
+                        THEN 'missing_vwap_with_turnover'
                       WHEN signal_open <= 0 OR signal_high <= 0
                         OR signal_low <= 0 OR signal_close <= 0
                         THEN 'invalid_signal_price'
@@ -77,6 +79,7 @@ class RealMarketDataAuditor:
                 WHERE open <= 0 OR high <= 0 OR low <= 0 OR close <= 0
                    OR high < MAX(open, close) OR low > MIN(open, close)
                    OR high < low OR volume < 0 OR amount < 0
+                   OR (amount > 0 AND volume > 0 AND vwap IS NULL)
                    OR signal_open <= 0 OR signal_high <= 0
                    OR signal_low <= 0 OR signal_close <= 0
                 ORDER BY trading_date, symbol

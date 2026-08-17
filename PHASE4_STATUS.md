@@ -36,6 +36,12 @@ Checkpoint date: 2026-08-17
   reports no broken requirements.
 - Provider functions that hide HTTP calls now receive a 20-second default at
   the underlying Requests session, preventing unbounded waits.
+- Sina one-price sessions can report aggregate amount/volume values a fraction
+  of a price tick outside the OHLC range. Sub-half-tick rounding is now clamped
+  to the observed boundary; material mismatches retain OHLCV with missing VWAP
+  and are explicit audit failures rather than fabricated execution prices.
+- A restarted sync marks stale `running` rows as `interrupted` before resuming,
+  so stopped processes cannot masquerade as concurrent active downloads.
 
 ## Data status (not committed)
 
@@ -50,6 +56,9 @@ Checkpoint date: 2026-08-17
 - The full-market sync is not complete and no passing data audit is claimed.
   The background sync remains resumable, retains failures in the per-symbol
   ledger, and does not delete existing rows.
+- A later status snapshot contained 119,584 bars across 82 symbols. The first
+  live run exposed provider-rounding VWAP failures; after the normalization fix,
+  the same cache was restarted and those retained failures began reprocessing.
 - All SQLite files, virtual environments, generated reports, and temporary
   outputs remain excluded by `.gitignore`.
 - No API key, token, credential, or real-market return result is stored in this

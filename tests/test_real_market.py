@@ -22,8 +22,10 @@ from stock_picker import (
     Phase4FoundationRunner,
     RealMarketDataAuditor,
     SQLiteMarketCache,
+    SymbolSyncStatus,
     TushareAdapter,
 )
+from stock_picker.real_market import _bounded_vwap
 
 
 END = date(2015, 6, 4)
@@ -195,6 +197,10 @@ class _FakeTushare:
 
 
 class SQLiteCausalDataTests(unittest.TestCase):
+    def test_vwap_clamps_sub_tick_rounding_and_rejects_material_mismatch(self) -> None:
+        self.assertEqual(_bounded_vwap(12_073_481, 1_931_757, 6.25, 6.25), 6.25)
+        self.assertIsNone(_bounded_vwap(100_000, 10_000, 9.0, 9.5))
+
     def test_round_trip_preserves_prices_limits_and_classification_time(self) -> None:
         with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
@@ -246,6 +252,23 @@ class SQLiteCausalDataTests(unittest.TestCase):
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
+    def test_stale_running_status_is_marked_interrupted_on_restart(self) -> None:
+        with _test_directory() as directory:
+            cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
+            cache.save_sync_status(
+                SymbolSyncStatus(
+                    "999999", "AkShare", "running", PHASE4_START, END
+                )
+            )
+
+            AkShareAdapter(
+                ak_module=_FakeAkShare(), request_interval=0, retry_delay=0
+            ).sync(cache, PHASE4_START, END)
+
+            statuses = {item.symbol: item for item in cache.sync_statuses()}
+            self.assertEqual(statuses["999999"].status, "interrupted")
+            self.assertIn("queued for resume", statuses["999999"].last_error or "")
+
     def test_hidden_requests_call_receives_default_timeout(self) -> None:
         import requests
 

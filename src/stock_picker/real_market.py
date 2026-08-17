@@ -651,6 +651,22 @@ class AkShareAdapter:
             stocks = stocks[: self.symbol_limit]
         cache.upsert_stocks(stocks)
         previous_statuses = {item.symbol: item for item in cache.sync_statuses()}
+        for item in previous_statuses.values():
+            if item.status == "running":
+                cache.save_sync_status(
+                    SymbolSyncStatus(
+                        item.symbol,
+                        item.provider,
+                        "interrupted",
+                        item.requested_start,
+                        item.requested_end,
+                        item.synced_through,
+                        item.bar_count,
+                        item.attempts,
+                        item.source,
+                        "previous sync stopped; queued for resume",
+                    )
+                )
         new_bars = 0
         failed_symbols: list[str] = []
         warnings = [
@@ -980,7 +996,7 @@ class AkShareAdapter:
                     low=low,
                     close=close,
                     volume=volume,
-                    vwap=amount / volume if volume and amount else None,
+                    vwap=_bounded_vwap(amount, volume, low, high),
                     tradable=volume > 0,
                     limit_up_locked=locked_up,
                     limit_down_locked=locked_down,
@@ -1369,6 +1385,22 @@ def _infer_limits(
 
 def _same_price(*values: float) -> bool:
     return max(values) - min(values) < 0.005
+
+
+def _bounded_vwap(
+    amount: float, volume: int, low: float, high: float
+) -> float | None:
+    """Normalize only sub-tick provider rounding; reject material mismatches."""
+
+    if amount <= 0 or volume <= 0:
+        return None
+    value = amount / volume
+    half_tick = 0.005
+    if value < low:
+        return low if low - value < half_tick else None
+    if value > high:
+        return high if value - high < half_tick else None
+    return value
 
 
 def _exchange_for_symbol(symbol: str) -> str:
