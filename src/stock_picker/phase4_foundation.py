@@ -17,11 +17,13 @@ from .real_market import (
     TushareAdapter,
 )
 from .reporting import BacktestReportWriter
+from .sync_monitor import Phase4SyncMonitor
 
 
 DEFAULT_CACHE = Path("data/a_share_201506_present.sqlite")
 DEFAULT_REPORT = Path("phase4_real_market_report/foundation")
-DEFAULT_AUDIT = Path("phase4_real_market_report/data_audit.json")
+DEFAULT_AUDIT = Path("phase4_data_audit_report")
+DEFAULT_SYNC_STATUS = Path("phase4_sync_status.json")
 
 
 class DataCoverageError(RuntimeError):
@@ -137,13 +139,14 @@ def main() -> None:
         description="Phase 4 real A-share data sync and foundation backtest"
     )
     parser.add_argument(
-        "command", choices=("sync", "status", "audit", "backtest")
+        "command", choices=("sync", "status", "monitor", "audit", "backtest")
     )
     parser.add_argument("--provider", choices=("akshare", "tushare"), default="akshare")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--end", type=date.fromisoformat, default=date.today())
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--audit-output", type=Path, default=DEFAULT_AUDIT)
+    parser.add_argument("--status-output", type=Path, default=DEFAULT_SYNC_STATUS)
     parser.add_argument("--symbol-limit", type=int)
     parser.add_argument(
         "--history-source", choices=("auto", "sina"), default="auto"
@@ -191,6 +194,13 @@ def main() -> None:
             },
             "audit": cache.load_audit(),
         }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    elif args.command == "monitor":
+        payload, _ = Phase4SyncMonitor(cache).refresh(
+            end_date=args.end,
+            status_output=args.status_output,
+            audit_output=args.audit_output,
+        )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     elif args.command == "audit":
         result = RealMarketDataAuditor(cache).run(

@@ -59,6 +59,13 @@ Checkpoint date: 2026-08-17
 - A later status snapshot contained 119,584 bars across 82 symbols. The first
   live run exposed provider-rounding VWAP failures; after the normalization fix,
   the same cache was restarted and those retained failures began reprocessing.
+- A 30-minute monitor now writes `phase4_sync_status.json` and triggers the
+  independent audit only after all inventory symbols reach a settled state.
+  The audit bundle separates the main report, missing stocks, missing dates,
+  and data anomalies. SQLite, logs, caches, and generated reports remain ignored.
+- Latest implementation-validation snapshot: 5,877 inventory symbols, 205
+  complete, 28 failed, 10 unavailable, 5,633 not yet processed; current symbol
+  `000657` was at 2024-06-06. Audit was correctly not triggered.
 - All SQLite files, virtual environments, generated reports, and temporary
   outputs remain excluded by `.gitignore`.
 - No API key, token, credential, or real-market return result is stored in this

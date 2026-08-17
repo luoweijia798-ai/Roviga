@@ -54,6 +54,7 @@ from .reporting import BacktestReportWriter
 from .risk import PositionSizing, RiskConfig, RiskManager, RiskStatus
 from .selector import NoEligibleStockError, SelectionConfig, StockSelector
 from .tracking import CandidateTrack, DailyTracker, TrackingState
+from .sync_monitor import Phase4SyncMonitor
 from .trading import (
     ExecutionConfig,
     InMemoryTradeLedger,
@@ -127,6 +128,7 @@ __all__ = [
     "PHASE4_START",
     "Phase4FoundationResult",
     "Phase4FoundationRunner",
+    "Phase4SyncMonitor",
     "RealMarketAdapter",
     "RealMarketDataAuditor",
     "SQLiteHistoricalData",

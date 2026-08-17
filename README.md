@@ -286,6 +286,28 @@ coverage, and incomplete/failed symbols. A failed audit exits with status 2.
 The `backtest` command refuses to run unless the saved audit passed and matches
 the current sync manifest, so any subsequent data update requires a new audit.
 
+For unattended synchronization, run the monitor every 30 minutes (for example,
+through the Codex task scheduler):
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation monitor `
+  --status-output phase4_sync_status.json `
+  --audit-output phase4_data_audit_report
+```
+
+The compact status file records total/completed/failed/unavailable/unprocessed
+stock counts, the current symbol and date checkpoint, date coverage, average
+trading-day count, and the ten most frequent recent errors. The monitor runs the
+audit automatically only after every inventory symbol has a settled status and
+no symbol remains running or interrupted.
+
+`phase4_data_audit_report` contains `audit_report.json`,
+`missing_stocks.json`, `missing_dates.json`, and `data_anomalies.json`. Checks
+cover current/historical/delisted/BSE inventory, per-symbol session counts,
+OHLC logic, volume/amount consistency, VWAP availability, price-limit and lock
+consistency, benchmarks, and duplicate daily rows. These runtime reports are
+ignored by Git.
+
 Industry/concept snapshots add many provider requests. They are enabled by
 default; use `--skip-classifications` only when downloading price data first,
 then run a later full sync to add classifications.

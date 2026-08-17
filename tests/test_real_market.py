@@ -20,9 +20,11 @@ from stock_picker import (
     HistoricalBar,
     PHASE4_START,
     Phase4FoundationRunner,
+    Phase4SyncMonitor,
     RealMarketDataAuditor,
     SQLiteMarketCache,
     SymbolSyncStatus,
+    StockInfo,
     TushareAdapter,
 )
 from stock_picker.real_market import _bounded_vwap
@@ -252,6 +254,41 @@ class SQLiteCausalDataTests(unittest.TestCase):
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
+    def test_monitor_waits_for_all_stocks_then_writes_audit_bundle(self) -> None:
+        with _test_directory() as directory:
+            root = Path(directory)
+            cache = SQLiteMarketCache(root / "market.sqlite")
+            AkShareAdapter(
+                ak_module=_FakeAkShare(), request_interval=0, retry_delay=0
+            ).sync(cache, PHASE4_START, END)
+            monitor = Phase4SyncMonitor(cache)
+
+            complete, audit = monitor.refresh(
+                end_date=END,
+                status_output=root / "phase4_sync_status.json",
+                audit_output=root / "phase4_data_audit_report",
+            )
+
+            self.assertTrue(complete["sync_complete"])
+            self.assertTrue(complete["audit_triggered"])
+            self.assertIsNotNone(audit)
+            self.assertTrue((root / "phase4_data_audit_report/audit_report.json").exists())
+            self.assertTrue((root / "phase4_data_audit_report/missing_stocks.json").exists())
+            self.assertTrue((root / "phase4_data_audit_report/missing_dates.json").exists())
+            self.assertTrue((root / "phase4_data_audit_report/data_anomalies.json").exists())
+
+            cache.upsert_stocks(
+                [StockInfo("000002", "Pending", "SZSE", source="test")]
+            )
+            incomplete, second_audit = monitor.refresh(
+                end_date=END,
+                status_output=root / "phase4_sync_status.json",
+                audit_output=root / "not_generated",
+            )
+            self.assertFalse(incomplete["sync_complete"])
+            self.assertFalse(incomplete["audit_triggered"])
+            self.assertIsNone(second_audit)
+
     def test_stale_running_status_is_marked_interrupted_on_restart(self) -> None:
         with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
