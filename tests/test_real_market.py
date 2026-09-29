@@ -151,6 +151,13 @@ class _FlakyAkShare(_FakeAkShare):
         return super().stock_zh_a_hist(**arguments)
 
 
+class _EmptyAdjustedAkShare(_FakeAkShare):
+    def stock_zh_a_hist(self, **arguments: str) -> pd.DataFrame:
+        if arguments["adjust"] == "hfq":
+            return pd.DataFrame()
+        return super().stock_zh_a_hist(**arguments)
+
+
 class _FakeTushare:
     def stock_basic(self, **_: object) -> pd.DataFrame:
         return pd.DataFrame(
@@ -254,6 +261,24 @@ class SQLiteCausalDataTests(unittest.TestCase):
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
+    def test_empty_adjusted_history_falls_back_to_raw_signal_prices(self) -> None:
+        with _test_directory() as directory:
+            cache = SQLiteMarketCache(Path(directory) / "market.sqlite")
+            manifest = AkShareAdapter(
+                ak_module=_EmptyAdjustedAkShare(),
+                include_classifications=False,
+                request_interval=0,
+                retry_delay=0,
+            ).sync(cache, PHASE4_START, END)
+            portal = cache.as_historical_data().portal()
+            portal.advance_to(PHASE4_START)
+            bar = portal.bar("000001", PHASE4_START)
+
+            self.assertEqual(manifest.bar_count, 4)
+            self.assertIsNotNone(bar)
+            assert bar is not None
+            self.assertEqual(bar.signal_close, bar.close)
+
     def test_monitor_waits_for_all_stocks_then_writes_audit_bundle(self) -> None:
         with _test_directory() as directory:
             root = Path(directory)

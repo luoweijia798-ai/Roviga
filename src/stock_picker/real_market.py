@@ -956,10 +956,15 @@ class AkShareAdapter:
         )
         if raw.empty:
             return ()
-        adjusted_by_date = {
-            _as_date(row[_column(adjusted, "日期", "date")]): row
-            for _, row in adjusted.iterrows()
-        }
+        adjusted_date_column = _optional_column(adjusted, "日期", "date")
+        adjusted_by_date = (
+            {
+                _as_date(row[adjusted_date_column]): row
+                for _, row in adjusted.iterrows()
+            }
+            if adjusted_date_column is not None
+            else {}
+        )
         bars: list[HistoricalBar] = []
         previous_close: float | None = None
         for _, row in raw.iterrows():
