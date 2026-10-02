@@ -70,6 +70,10 @@ class Phase4FoundationRunner:
             raise DataCoverageError(
                 "data changed after the last passing audit; run the audit again"
             )
+        if audit.get("data_revision") != self.cache.data_revision:
+            raise DataCoverageError("audit is stale; data revision does not match")
+        if audit.get("requested_start", "9999-12-31") > PHASE4_START.isoformat():
+            raise DataCoverageError("passing audit does not cover the required start date")
         if audit.get("requested_end", "") < end_date.isoformat():
             raise DataCoverageError("passing audit does not cover the requested end date")
         coverage = self.cache.coverage()

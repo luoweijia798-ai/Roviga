@@ -13,3 +13,6 @@ data/*.sqlite-wal
 phase4_real_market_report/
 phase4_data_audit_report/
 phase4_sync_status.json
+phase4_sync_status.json.tmp
+logs/
+data/*.lock

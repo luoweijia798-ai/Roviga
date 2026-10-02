@@ -33,6 +33,7 @@ class RealMarketDataAuditor:
         output: str | Path | None = None,
     ) -> DataAuditResult:
         end_date = end_date or date.today()
+        revision = self.cache.data_revision
         manifest = self.cache.load_manifest()
         statuses = self.cache.sync_statuses()
         with self.cache.connect() as connection:
@@ -75,6 +76,9 @@ class RealMarketDataAuditor:
                         THEN 'volume_without_amount'
                       WHEN amount > 0 AND volume > 0 AND vwap IS NULL
                         THEN 'missing_vwap_with_turnover'
+                      WHEN amount > 0 AND volume > 0 AND vwap IS NOT NULL
+                        AND ABS(vwap - amount / volume) > 0.005
+                        THEN 'inconsistent_vwap'
                       WHEN up_limit IS NOT NULL AND down_limit IS NOT NULL
                         AND up_limit <= down_limit THEN 'invalid_limit_order'
                       WHEN up_limit IS NOT NULL AND close > up_limit + 0.005
@@ -104,6 +108,8 @@ class RealMarketDataAuditor:
                    OR (tradable = 1 AND volume = 0)
                    OR (volume > 0 AND amount = 0)
                    OR (amount > 0 AND volume > 0 AND vwap IS NULL)
+                   OR (amount > 0 AND volume > 0 AND vwap IS NOT NULL
+                       AND ABS(vwap - amount / volume) > 0.005)
                    OR (up_limit IS NOT NULL AND down_limit IS NOT NULL
                        AND up_limit <= down_limit)
                    OR (up_limit IS NOT NULL AND close > up_limit + 0.005)
@@ -172,6 +178,13 @@ class RealMarketDataAuditor:
                     "bar_count": int(coverage["row_count"]) if coverage else 0,
                     "expected_sessions": len(expected),
                     "missing_count": len(missing),
+                    "listing_date_known": bool(stock["list_date"]),
+                    "missing_session_note": (
+                        "Unexplained sessions, not confirmed data loss: suspension "
+                        "calendar is not yet verified; unknown listing dates also "
+                        "make pre-listing sessions provisional. Never fill synthetically."
+                        if missing else None
+                    ),
                     "missing_trading_date_ranges": _missing_ranges(
                         expected, set(missing)
                     ),
@@ -198,7 +211,9 @@ class RealMarketDataAuditor:
                 "last_error": item.last_error,
             }
             for item in statuses
-            if item.status != "complete"
+            if item.status != "complete" or item.requested_start > start_date
+            or item.requested_end < end_date or not item.synced_through
+            or item.synced_through < end_date
         ]
         anomaly_details = [dict(row) for row in anomaly_rows]
         duplicate_details = [dict(row) for row in duplicate_rows]
@@ -240,7 +255,10 @@ class RealMarketDataAuditor:
             "sync_manifest_covers_requested_range": manifest is not None
             and manifest.start_date <= start_date
             and manifest.end_date >= end_date,
-            "all_symbols_have_complete_status": bool(statuses) and not failures,
+            "all_symbols_have_complete_status": bool(statuses) and not failures
+            and {row["symbol"] for row in stock_rows}.issubset(
+                {item.symbol for item in statuses}
+            ),
             "all_inventory_symbols_have_bars": not missing_stocks,
             "delisted_stocks_have_data": not delisted_symbols
             or all(symbol in bars_by_symbol for symbol in delisted_symbols),
@@ -251,10 +269,18 @@ class RealMarketDataAuditor:
             ),
             "ohlcv_and_limit_checks_pass": not anomaly_details,
             "no_duplicate_daily_bars": not duplicate_details,
+            "trading_sessions_complete_or_explained": not any(
+                item["missing_count"] for item in missing_by_symbol
+            ),
         }
+        # Every failed check closes the gate, including incomplete coverage.
+        for name, passed in audit_checks.items():
+            if not passed:
+                blockers.append(f"failed check: {name}")
 
         payload: dict[str, Any] = {
             "schema_version": 2,
+            "data_revision": revision,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "requested_start": start_date.isoformat(),
             "requested_end": end_date.isoformat(),
@@ -309,7 +335,7 @@ class RealMarketDataAuditor:
         self.cache.save_audit(payload)
         if output is not None:
             _write_audit_report(Path(output), payload)
-        return DataAuditResult(not blockers, payload)
+        return DataAuditResult(bool(payload["passed"]), payload)
 
     def _serializable_coverage(self) -> dict[str, Any]:
         return {

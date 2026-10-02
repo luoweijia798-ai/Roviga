@@ -104,6 +104,8 @@ class SQLiteMarketCache:
     def upsert_bars(self, bars: Iterable[HistoricalBar]) -> int:
         rows = list(bars)
         with self.connect() as connection:
+            if rows:
+                self._invalidate_audit(connection)
             connection.executemany(
                 """
                 INSERT OR REPLACE INTO bars (
@@ -142,6 +144,8 @@ class SQLiteMarketCache:
     def upsert_benchmarks(self, points: Iterable[BenchmarkPoint]) -> int:
         rows = list(points)
         with self.connect() as connection:
+            if rows:
+                self._invalidate_audit(connection)
             connection.executemany(
                 "INSERT OR REPLACE INTO benchmarks VALUES (?, ?, ?)",
                 [
@@ -154,11 +158,19 @@ class SQLiteMarketCache:
     def upsert_stocks(self, stocks: Iterable[StockInfo]) -> int:
         rows = list(stocks)
         with self.connect() as connection:
+            if rows:
+                self._invalidate_audit(connection)
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO stocks (
+                INSERT INTO stocks (
                     symbol, name, exchange, list_date, delist_date, industry, source
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name=excluded.name, exchange=excluded.exchange,
+                    list_date=COALESCE(excluded.list_date, stocks.list_date),
+                    delist_date=COALESCE(excluded.delist_date, stocks.delist_date),
+                    industry=COALESCE(excluded.industry, stocks.industry),
+                    source=excluded.source
                 """,
                 [
                     (
@@ -180,6 +192,8 @@ class SQLiteMarketCache:
     ) -> int:
         rows = list(records)
         with self.connect() as connection:
+            if rows:
+                self._invalidate_audit(connection)
             connection.executemany(
                 """
                 INSERT OR REPLACE INTO classifications (
@@ -208,6 +222,7 @@ class SQLiteMarketCache:
         payload["end_date"] = manifest.end_date.isoformat()
         payload["warnings"] = list(manifest.warnings)
         with self.connect() as connection:
+            self._invalidate_audit(connection)
             connection.execute(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES ('manifest', ?)",
                 (json.dumps(payload, ensure_ascii=False),),
@@ -233,8 +248,19 @@ class SQLiteMarketCache:
             ).fetchone()
         return date.fromisoformat(row[0]) if row and row[0] else None
 
+    def stock_inventory(self) -> tuple[StockInfo, ...]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM stocks ORDER BY symbol").fetchall()
+        return tuple(
+            StockInfo(row["symbol"], row["name"], row["exchange"],
+                      _optional_date(row["list_date"]),
+                      _optional_date(row["delist_date"]), row["industry"], row["source"])
+            for row in rows
+        )
+
     def save_sync_status(self, status: SymbolSyncStatus) -> None:
         with self.connect() as connection:
+            self._invalidate_audit(connection)
             connection.execute(
                 """
                 INSERT OR REPLACE INTO symbol_sync_status (
@@ -290,6 +316,13 @@ class SQLiteMarketCache:
 
     def save_audit(self, payload: dict[str, object]) -> None:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            revision = self._revision(connection)
+            if payload.get("data_revision") != revision:
+                payload["passed"] = False
+                payload.setdefault("blockers", []).append(
+                    "data changed during audit; repeat after sync is idle"
+                )
             connection.execute(
                 "INSERT OR REPLACE INTO metadata(key, value) VALUES ('data_audit', ?)",
                 (json.dumps(payload, ensure_ascii=False),),
@@ -301,6 +334,26 @@ class SQLiteMarketCache:
                 "SELECT value FROM metadata WHERE key='data_audit'"
             ).fetchone()
         return json.loads(row[0]) if row else None
+
+    @property
+    def data_revision(self) -> int:
+        with self.connect() as connection:
+            return self._revision(connection)
+
+    @staticmethod
+    def _revision(connection: sqlite3.Connection) -> int:
+        row = connection.execute(
+            "SELECT value FROM metadata WHERE key='data_revision'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    @staticmethod
+    def _invalidate_audit(connection: sqlite3.Connection) -> None:
+        connection.execute("DELETE FROM metadata WHERE key='data_audit'")
+        connection.execute(
+            "INSERT INTO metadata(key, value) VALUES ('data_revision', '1') "
+            "ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1"
+        )
 
     def coverage(self) -> dict[str, object]:
         with self.connect() as connection:
@@ -650,6 +703,10 @@ class AkShareAdapter:
         if self.symbol_limit is not None:
             stocks = stocks[: self.symbol_limit]
         cache.upsert_stocks(stocks)
+        if self.symbol_limit is None:
+            # A temporary provider inventory omission must not drop a retained
+            # historical/delisted symbol from the retry queue.
+            stocks = list(cache.stock_inventory())
         previous_statuses = {item.symbol: item for item in cache.sync_statuses()}
         for item in previous_statuses.values():
             if item.status == "running":
@@ -679,30 +736,46 @@ class AkShareAdapter:
         ]
         pending: list[tuple[StockInfo, date]] = []
         for stock in stocks:
+            previous = previous_statuses.get(stock.symbol)
             latest = cache.latest_bar_date(stock.symbol)
-            fetch_start = max(start_date, latest + timedelta(days=1)) if latest else start_date
-            if fetch_start > end_date:
-                previous = previous_statuses.get(stock.symbol)
-                cache.save_sync_status(
-                    SymbolSyncStatus(
-                        stock.symbol, "AkShare", "complete", start_date, end_date,
-                        latest, cache.symbol_bar_count(stock.symbol),
-                        previous.attempts if previous else 0,
-                        previous.source if previous else "cache",
-                    )
-                )
+            if (previous and previous.status == "complete"
+                    and previous.requested_start <= start_date
+                    and previous.synced_through
+                    and previous.synced_through >= end_date):
                 continue
+            checkpoint = (
+                previous.synced_through
+                if previous and previous.requested_start <= start_date
+                and previous.synced_through and previous.status != "unavailable"
+                else latest
+            )
+            fetch_start = max(start_date, checkpoint + timedelta(days=1)) if checkpoint else start_date
+            if previous and previous.requested_start > start_date:
+                fetch_start = start_date
+            if fetch_start > end_date:
+                # Never clear a retained failure merely because its final row
+                # happens to reach the end date. Revalidate the last segment.
+                fetch_start = end_date
             pending.append((stock, fetch_start))
+        pending.sort(key=lambda item: (
+            0 if (previous_statuses.get(item[0].symbol) is None
+                  or previous_statuses[item[0].symbol].status != "complete") else 1,
+            item[0].symbol,
+        ))
         completed = len(stocks) - len(pending)
         for stock, fetch_start in pending:
             request_attempt_start = self._request_attempts
             failed = False
-            source = ""
+            previous = previous_statuses.get(stock.symbol)
+            source = previous.source if previous else ""
+            previous_attempts = previous.attempts if previous else 0
+            checkpoint = fetch_start - timedelta(days=1) if fetch_start > start_date else None
             cache.save_sync_status(
                 SymbolSyncStatus(
                     stock.symbol, "AkShare", "running", start_date, end_date,
-                    cache.latest_bar_date(stock.symbol),
+                    checkpoint,
                     cache.symbol_bar_count(stock.symbol),
+                    previous_attempts, source,
                 )
             )
             for segment_start, segment_end in _date_segments(
@@ -714,12 +787,13 @@ class AkShareAdapter:
                     )
                     source = self._last_history_source or source
                     new_bars += cache.upsert_bars(bars)
+                    checkpoint = segment_end
                     cache.save_sync_status(
                         SymbolSyncStatus(
                             stock.symbol, "AkShare", "running", start_date,
                             end_date, segment_end,
                             cache.symbol_bar_count(stock.symbol),
-                            self._request_attempts - request_attempt_start,
+                            previous_attempts + self._request_attempts - request_attempt_start,
                             source,
                         )
                     )
@@ -731,9 +805,9 @@ class AkShareAdapter:
                     cache.save_sync_status(
                         SymbolSyncStatus(
                             stock.symbol, "AkShare", "failed", start_date,
-                            end_date, cache.latest_bar_date(stock.symbol),
+                            end_date, checkpoint,
                             cache.symbol_bar_count(stock.symbol),
-                            self._request_attempts - request_attempt_start,
+                            previous_attempts + self._request_attempts - request_attempt_start,
                             source, f"{type(error).__name__}: {error}",
                         )
                     )
@@ -745,7 +819,7 @@ class AkShareAdapter:
                     SymbolSyncStatus(
                         stock.symbol, "AkShare", final_status, start_date,
                         end_date, end_date if total_bars else None, total_bars,
-                        self._request_attempts - request_attempt_start, source,
+                        previous_attempts + self._request_attempts - request_attempt_start, source,
                         "provider returned no rows" if not total_bars else None,
                     )
                 )
@@ -1029,6 +1103,9 @@ class AkShareAdapter:
                 raw = self._request(
                     ak.stock_zh_a_hist, **arguments, adjust=""
                 )
+                if raw.empty:
+                    self._last_history_source = "AkShare.Eastmoney"
+                    return raw, raw, 100
                 adjusted = self._request(
                     ak.stock_zh_a_hist, **arguments, adjust="hfq"
                 )
@@ -1040,6 +1117,12 @@ class AkShareAdapter:
                 eastmoney_error = error
                 # Keep probing Eastmoney on later symbols/segments. Transient
                 # throttling must not permanently switch a full sync to fallback.
+        if stock.exchange == "BSE":
+            raise RuntimeError(
+                "BSE history unavailable from Eastmoney; Sina A-share fallback "
+                "does not support this exchange. Retained for source recovery. "
+                f"Primary error: {eastmoney_error}"
+            ) from eastmoney_error
         sina_function = getattr(ak, "stock_zh_a_daily", None)
         if sina_function is None:
             if eastmoney_error is not None:

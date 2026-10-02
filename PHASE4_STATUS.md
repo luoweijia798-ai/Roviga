@@ -1,6 +1,53 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-08-17
+Checkpoint date: 2026-10-02
+
+## Recovery checkpoint (2026-10-02)
+
+- The active downloader was preserved. At 11:49 China time the live cache had
+  5,905 inventory stocks: 5,233 complete, 668 failed, 1 interrupted, 1 running,
+  and 2 without ledger records. It contained 11,238,830 bars for 5,710 stocks,
+  dated 2015-06-01 through 2026-09-30. These are runtime observations, not a
+  claim that all complete statuses cover the new target 2026-10-02.
+- Reproducing `KeyError: 'date'` showed that the 347 such retained failures
+  were BSE symbols entering Sina's unsupported A-share decoder. The earlier
+  empty-adjusted-frame fix did NOT resolve this upstream failure. BSE now
+  retains an explicit source-coverage failure instead of invoking that fallback.
+  Eastmoney remains primary, but availability is not claimed for BSE.
+- Retries prioritize failed/interrupted/unprocessed stocks before advancing
+  previously complete stocks to the latest date. Segment-end checkpoints now
+  include successful empty segments, so pre-listing date ranges do not repeat
+  after a later failure. Provider inventory omissions cannot remove retained
+  historical stocks; existing listing/delisting metadata is preserved.
+- `stock_picker.sync_guardian` maintains a fixed batch end date, one-writer
+  lock, 30-minute snapshots, and 15-minute retries after incomplete scans or
+  worker failure. A zero worker exit code is NOT full-market completion.
+  Windows task `RovigaPhase4Sync` now has a 30-minute restart opportunity and
+  login trigger. The new guardian waits for the existing legacy supervisor
+  to finish naturally; no active downloader was terminated or duplicated.
+- `phase4_sync_status.json` is written atomically in the repository root.
+  `scan_complete`, `sync_complete`, and `target_pending_count` are separate.
+  Old completed ledgers cannot make a newer requested end date look complete.
+- Audit gates now fail on every failed coverage check and unexplained missing
+  session, check VWAP against amount/share volume, and invalidate prior audits
+  whenever persisted market data or sync metadata changes. A revision check
+  prevents an audit from passing if data changes while it is running.
+  Missing sessions before an unknown listing date, or on unverified suspension
+  dates, are explicitly provisional; they are not fabricated or waved through.
+- All 12 new recovery tests and the 11 existing market-module tests passed
+  using isolated test caches. No real-market backtest was run. Test fixtures
+  are never mixed into the production SQLite cache.
+- The prior September 27 audit failed (including 696 incomplete symbols and
+  62,785 flagged rows); it is stale and is not a current audit result. Inferred
+  historical price limits, missing VWAP, listing metadata, suspended sessions,
+  delisted and BSE source coverage still need investigation. No passing audit
+  and no delivery date are claimed.
+- The existing Codex 30-minute Phase 4 heartbeat is active again, uses the
+  corrected root snapshot, and reports meaningful changes or completion.
+  On audit completion the guardian waits for instructions; it cannot invoke
+  a backtest. `selector.py` and `risk.py` remain unchanged.
+
+The earlier sections below are historical checkpoints, not live counters.
 
 ## Completed and saved
 

@@ -22,6 +22,7 @@ class Phase4SyncMonitor:
         end_date: date,
         status_output: str | Path,
         audit_output: str | Path,
+        audit_when_settled: bool = True,
     ) -> tuple[dict[str, Any], DataAuditResult | None]:
         statuses = self.cache.sync_statuses()
         counts = Counter(item.status for item in statuses)
@@ -36,9 +37,9 @@ class Phase4SyncMonitor:
                 FROM bars
                 """
             ).fetchone()
-        current = next(
-            (item for item in reversed(statuses) if item.status == "running"),
-            None,
+        current = max(
+            (item for item in statuses if item.status == "running"),
+            key=lambda item: item.updated_at, default=None,
         )
         errors = Counter(
             (item.status, item.last_error or "no error detail")
@@ -46,19 +47,29 @@ class Phase4SyncMonitor:
             if item.status != "complete"
         )
         settled = counts["complete"] + counts["failed"] + counts["unavailable"]
-        sync_complete = (
+        target_pending = sum(
+            item.requested_start > PHASE4_START or item.requested_end < end_date
+            or (item.status == "complete" and (
+                not item.synced_through or item.synced_through < end_date
+            )) for item in statuses
+        )
+        scan_complete = (
             total_stocks > 0
             and len(statuses) >= total_stocks
             and settled >= total_stocks
             and counts["running"] == 0
             and counts["interrupted"] == 0
+            and target_pending == 0
         )
+        sync_complete = scan_complete and counts["failed"] == 0 and counts["unavailable"] == 0
         payload: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "requested_start": PHASE4_START.isoformat(),
             "requested_end": end_date.isoformat(),
             "sync_complete": sync_complete,
+            "scan_complete": scan_complete,
+            "target_pending_count": target_pending,
             "total_stock_count": total_stocks,
             "completed_count": counts["complete"],
             "failed_count": counts["failed"],
@@ -84,8 +95,11 @@ class Phase4SyncMonitor:
             "audit_triggered": False,
             "audit_passed": None,
         }
+        path = Path(status_output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_status(path, payload)
         audit: DataAuditResult | None = None
-        if sync_complete:
+        if scan_complete and audit_when_settled:
             audit = RealMarketDataAuditor(self.cache).run(
                 start_date=PHASE4_START,
                 end_date=end_date,
@@ -93,12 +107,14 @@ class Phase4SyncMonitor:
             )
             payload["audit_triggered"] = True
             payload["audit_passed"] = audit.passed
-        path = Path(status_output)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_status(path, payload)
         return payload, audit
+
+
+def _write_status(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _status_payload(status: Any | None) -> dict[str, Any] | None:
