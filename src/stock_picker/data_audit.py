@@ -139,8 +139,25 @@ class RealMarketDataAuditor:
 
         reference_dates = tuple(row["trading_date"] for row in reference_rows)
         bars_by_symbol = {row["symbol"]: row for row in bar_coverage}
+        metadata_conflicts = []
+        for stock in stock_rows:
+            coverage = bars_by_symbol.get(stock["symbol"])
+            if coverage and (
+                (stock["list_date"] and coverage["first_date"] < stock["list_date"])
+                or (stock["delist_date"] and coverage["last_date"] > stock["delist_date"])
+            ):
+                metadata_conflicts.append({
+                    "symbol": stock["symbol"], "list_date": stock["list_date"],
+                    "delist_date": stock["delist_date"],
+                    "first_bar": coverage["first_date"], "last_bar": coverage["last_date"],
+                })
         delisted_symbols = {
             row["symbol"] for row in stock_rows if row["delist_date"]
+        }
+        required_symbols = {
+            row["symbol"] for row in stock_rows
+            if (not row["delist_date"] or row["delist_date"] >= start_date.isoformat())
+            and (not row["list_date"] or row["list_date"] <= end_date.isoformat())
         }
         bse_symbols = {
             row["symbol"] for row in stock_rows if row["exchange"] == "BSE"
@@ -261,7 +278,7 @@ class RealMarketDataAuditor:
             ),
             "all_inventory_symbols_have_bars": not missing_stocks,
             "delisted_stocks_have_data": not delisted_symbols
-            or all(symbol in bars_by_symbol for symbol in delisted_symbols),
+            or all(symbol in bars_by_symbol for symbol in delisted_symbols & required_symbols),
             "bse_stocks_have_data": not bse_symbols
             or all(symbol in bars_by_symbol for symbol in bse_symbols),
             "required_benchmarks_present": all(
@@ -269,6 +286,7 @@ class RealMarketDataAuditor:
             ),
             "ohlcv_and_limit_checks_pass": not anomaly_details,
             "no_duplicate_daily_bars": not duplicate_details,
+            "known_listing_dates_consistent_with_bars": not metadata_conflicts,
             "trading_sessions_complete_or_explained": not any(
                 item["missing_count"] for item in missing_by_symbol
             ),
@@ -297,6 +315,9 @@ class RealMarketDataAuditor:
                     len(bar_coverage) / len(stock_rows) if stock_rows else 0.0
                 ),
                 "delisted_count": len(delisted_symbols),
+                "required_in_range_count": len(required_symbols),
+                "outside_requested_range_count": len(stock_rows) - len(required_symbols),
+                "required_delisted_count": len(delisted_symbols & required_symbols),
                 "delisted_with_bars": sum(
                     symbol in bars_by_symbol for symbol in delisted_symbols
                 ),
@@ -323,6 +344,7 @@ class RealMarketDataAuditor:
             },
             "per_symbol_missing_sessions": missing_by_symbol,
             "missing_stocks": missing_stocks,
+            "stock_date_conflicts": metadata_conflicts,
             "anomalies": {
                 "count": len(anomaly_details),
                 "rows": anomaly_details,

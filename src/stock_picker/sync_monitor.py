@@ -30,6 +30,10 @@ class Phase4SyncMonitor:
             total_stocks = int(
                 connection.execute("SELECT COUNT(*) FROM stocks").fetchone()[0]
             )
+            outside_range = int(connection.execute(
+                "SELECT COUNT(*) FROM stocks WHERE delist_date < ? OR list_date > ?",
+                (PHASE4_START.isoformat(), end_date.isoformat()),
+            ).fetchone()[0])
             coverage = connection.execute(
                 """
                 SELECT MIN(trading_date), MAX(trading_date), COUNT(*),
@@ -71,6 +75,7 @@ class Phase4SyncMonitor:
             "scan_complete": scan_complete,
             "target_pending_count": target_pending,
             "total_stock_count": total_stocks,
+            "outside_requested_range_count": outside_range,
             "completed_count": counts["complete"],
             "failed_count": counts["failed"],
             "unavailable_count": counts["unavailable"],

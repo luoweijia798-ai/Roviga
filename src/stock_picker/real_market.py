@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from .historical import BenchmarkPoint, FutureDataError, HistoricalBar
 from .models import DailyBar
+from .sina_archive import fetch_sina_archive
 
 
 PHASE4_START = date(2015, 6, 1)
@@ -687,6 +688,9 @@ class AkShareAdapter:
         self._last_request_at: float | None = None
         self._request_attempts = 0
         self._last_history_source = ""
+        self._eastmoney_retry_at = 0.0
+        self._eastmoney_last_error: Exception | None = None
+        self._archive_cache: tuple[str, Any, Any, int] | None = None
         self._eastmoney_history_available: bool | None = (
             False if history_source == "sina" else None
         )
@@ -698,6 +702,8 @@ class AkShareAdapter:
         end_date: date | None = None,
     ) -> DataManifest:
         end_date = end_date or date.today()
+        self._sync_start, self._sync_end = start_date, end_date
+        self._archive_cache = None
         ak = self._module()
         stocks = self._stock_universe(ak)
         if self.symbol_limit is not None:
@@ -738,6 +744,30 @@ class AkShareAdapter:
         for stock in stocks:
             previous = previous_statuses.get(stock.symbol)
             latest = cache.latest_bar_date(stock.symbol)
+            if stock.delist_date and stock.delist_date < start_date:
+                if latest and latest >= start_date:
+                    cache.save_sync_status(SymbolSyncStatus(
+                        stock.symbol, "AkShare", "failed", start_date, end_date,
+                        previous.synced_through if previous else None,
+                        cache.symbol_bar_count(stock.symbol),
+                        previous.attempts if previous else 0, stock.source,
+                        "delisting metadata conflicts with cached bars; retained for review",
+                    ))
+                    failed_symbols.append(stock.symbol + ":MetadataConflict")
+                    continue
+                if (previous and previous.status == "complete"
+                        and previous.requested_start <= start_date
+                        and previous.synced_through and previous.synced_through >= end_date
+                        and previous.source.endswith(":outside_requested_range")):
+                    continue
+                cache.save_sync_status(SymbolSyncStatus(
+                    stock.symbol, "AkShare", "complete", start_date, end_date,
+                    end_date, cache.symbol_bar_count(stock.symbol),
+                    previous.attempts if previous else 0,
+                    stock.source + ":outside_requested_range",
+                    "No requested sessions: documented delisting before requested start",
+                ))
+                continue
             if (previous and previous.status == "complete"
                     and previous.requested_start <= start_date
                     and previous.synced_through
@@ -752,6 +782,10 @@ class AkShareAdapter:
             fetch_start = max(start_date, checkpoint + timedelta(days=1)) if checkpoint else start_date
             if previous and previous.requested_start > start_date:
                 fetch_start = start_date
+            if stock.delist_date and previous and previous.status != "complete":
+                # Old failures may have advanced beyond delisting despite holes
+                # in earlier segments. Verify/recover the whole active history.
+                fetch_start = max(start_date, stock.list_date or start_date)
             if fetch_start > end_date:
                 # Never clear a retained failure merely because its final row
                 # happens to reach the end date. Revalidate the last segment.
@@ -779,7 +813,7 @@ class AkShareAdapter:
                 )
             )
             for segment_start, segment_end in _date_segments(
-                fetch_start, end_date, self.segment_days
+                fetch_start, min(end_date, stock.delist_date or end_date), self.segment_days
             ):
                 try:
                     bars = self._fetch_symbol_bars(
@@ -1098,12 +1132,17 @@ class AkShareAdapter:
         arguments: dict[str, str],
     ) -> tuple[Any, Any, int]:
         eastmoney_error: Exception | None = None
-        if self._eastmoney_history_available is not False:
+        if stock.delist_date and self._archive_cache and self._archive_cache[0] == stock.symbol:
+            return self._archive_segment(arguments)
+        if (self._eastmoney_history_available is not False
+                and time.monotonic() >= self._eastmoney_retry_at):
             try:
                 raw = self._request(
                     ak.stock_zh_a_hist, **arguments, adjust=""
                 )
                 if raw.empty:
+                    if stock.delist_date:
+                        raise ValueError("Eastmoney has no retired history; checking real archive")
                     self._last_history_source = "AkShare.Eastmoney"
                     return raw, raw, 100
                 adjusted = self._request(
@@ -1115,8 +1154,31 @@ class AkShareAdapter:
                 return raw, adjusted, 100
             except Exception as error:
                 eastmoney_error = error
-                # Keep probing Eastmoney on later symbols/segments. Transient
-                # throttling must not permanently switch a full sync to fallback.
+                self._eastmoney_last_error = error
+                # Transport failures affect the endpoint, not each retired stock.
+                # Probe again after five minutes rather than burning the same
+                # retry budget for every segment. Symbol/data errors do not trip it.
+                try:
+                    import requests
+                    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+                        self._eastmoney_retry_at = time.monotonic() + 300
+                except ImportError:
+                    pass
+        else:
+            eastmoney_error = self._eastmoney_last_error
+        if stock.delist_date:
+            prefix = "sh" if stock.exchange == "SSE" else "sz"
+            raw, adjusted, multiplier = self._request(
+                fetch_sina_archive, symbol=prefix + stock.symbol,
+                start_date=getattr(self, "_sync_start", PHASE4_START).isoformat(),
+                end_date=getattr(self, "_sync_end", _as_date(arguments["end_date"])).isoformat(),
+            )
+            if not raw.empty and max(raw["date"]) > stock.delist_date:
+                raise ValueError(f"{stock.symbol}: archived trading after documented delisting")
+            if raw.empty:
+                raise RuntimeError(f"{stock.symbol}: no retired archive rows in requested range; retained source gap")
+            self._archive_cache = (stock.symbol, raw, adjusted, multiplier)
+            return self._archive_segment(arguments)
         if stock.exchange == "BSE":
             raise RuntimeError(
                 "BSE history unavailable from Eastmoney; Sina A-share fallback "
@@ -1141,6 +1203,14 @@ class AkShareAdapter:
         self._last_history_source = "AkShare.Sina"
         # Sina reports volume in shares.
         return raw, adjusted, 1
+
+    def _archive_segment(self, arguments: dict[str, str]) -> tuple[Any, Any, int]:
+        assert self._archive_cache is not None
+        _, raw, adjusted, multiplier = self._archive_cache
+        start, end = _as_date(arguments["start_date"]), _as_date(arguments["end_date"])
+        self._last_history_source = "AkShare.SinaArchive.KLC+HFQ"
+        return (raw[(raw["date"] >= start) & (raw["date"] <= end)].copy(),
+                adjusted[(adjusted["date"] >= start) & (adjusted["date"] <= end)].copy(), multiplier)
 
     def _request(self, function: Any, **arguments: str) -> Any:
         last_error: Exception | None = None
@@ -1171,7 +1241,7 @@ class AkShareAdapter:
         end_date: date,
     ) -> tuple[BenchmarkPoint, ...]:
         try:
-            if self._eastmoney_history_available is False:
+            if self._eastmoney_history_available is False or time.monotonic() < self._eastmoney_retry_at:
                 raise RuntimeError("Eastmoney history circuit is open")
             frame = self._request(
                 ak.stock_zh_index_daily_em,
@@ -1398,12 +1468,7 @@ def _row_to_bar(row: sqlite3.Row) -> HistoricalBar:
 
 
 def _call_with_optional_timeout(function: Any, **arguments: str) -> Any:
-    try:
-        return function(**arguments, timeout=20)
-    except TypeError as error:
-        if "timeout" not in str(error):
-            raise
-        return _call_with_requests_timeout(function, **arguments)
+    return _call_with_requests_timeout(function, **arguments)
 
 
 def _call_with_requests_timeout(function: Any, **arguments: str) -> Any:
@@ -1418,12 +1483,30 @@ def _call_with_requests_timeout(function: Any, **arguments: str) -> Any:
     def request_with_timeout(
         session: Any, method: str, url: str, **request_arguments: Any
     ) -> Any:
-        request_arguments.setdefault("timeout", 20)
-        return original(session, method, url, **request_arguments)
+        if request_arguments.get("timeout") is None:
+            request_arguments["timeout"] = 20
+        try:
+            return original(session, method, url, **request_arguments)
+        except requests.exceptions.ProxyError:
+            if request_arguments.get("proxies") or getattr(session, "proxies", None):
+                raise
+            # Windows registry proxies exist even without *_PROXY variables.
+            # Try a direct route once, without mutating system settings or TLS.
+            previous = session.trust_env
+            session.trust_env = False
+            try:
+                return original(session, method, url, **request_arguments)
+            finally:
+                session.trust_env = previous
 
     requests.sessions.Session.request = request_with_timeout
     try:
-        return function(**arguments)
+        try:
+            return function(**arguments, timeout=20)
+        except TypeError as error:
+            if "timeout" not in str(error):
+                raise
+            return function(**arguments)
     finally:
         requests.sessions.Session.request = original
 

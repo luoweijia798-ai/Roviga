@@ -1,6 +1,58 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-02
+Checkpoint date: 2026-10-11
+
+## Retired-history recovery fix (2026-10-11)
+
+- Investigation found that all 281 non-BSE failures were delisted stocks.
+  AkShare's Sina decoder successfully downloaded their raw KLC OHLCV, but then
+  crashed in the unrelated retired outstanding-share endpoint (`demjson`
+  "No value to decode"). Increasing retries cannot repair that expired endpoint.
+- Added a lazy real Sina archive reader using the existing pinned AKShare KLC
+  decoder and the provider's HFQ factor series. It does not request outstanding
+  shares, execute downloaded JavaScript, synthesize bars, forward-fill sessions,
+  or apply future factors to earlier dates. Volume remains shares; amount remains
+  yuan. Missing/invalid factors, duplicate dates, and source gaps retain failures.
+- Five live read-only conversion checks succeeded:
+  `000004` 2,463 bars, `000018` 1,083, `600068` 1,516, `600069` 1,148, and
+  `000024` 41. These are verified provider results, not a production import claim.
+  All five converted with non-missing VWAP; no return calculation was performed.
+- A failed delisted stock now rebuilds its in-range history rather than trusting
+  an old checkpoint that had advanced beyond delisting while earlier gaps remained.
+  Once fallback is needed, the archive is fetched once per stock and segmented
+  locally. Requests stop at the documented delisting boundary; conflicting
+  archive dates remain explicit metadata failures rather than silently discarded.
+- The failed inventory includes 85 stocks documented as delisted before
+  2015-06-01. They have no required sessions in this requested range, are retained
+  in inventory with explicit `outside_requested_range` provenance, and are not
+  reported as newly downloaded history. Audits disclose the outside-range count
+  and continue to require every in-range delisted stock. Conflicting cached bars
+  retain failures. No SQLite rows or failed stock identities are deleted.
+- Windows resolved an implicit system proxy at localhost:7890 despite no proxy
+  environment variables. Requests now try a direct route once after a system
+  proxy failure, restore the session afterwards, and preserve explicitly supplied
+  proxy configurations. System proxy settings and TLS verification are unchanged.
+- Both proxied and direct Eastmoney probes still failed during verification.
+  Transport failures now open a temporary five-minute endpoint cooldown and
+  automatically probe again; symbol-specific data errors do not open the circuit.
+  BSE does not use the unsupported Sina A-share source. The 28 retained BSE
+  failures remain unresolved; a Tencent BSE probe was also unsuccessful and
+  Tencent was not enabled as an unverified substitute.
+- All 32 selected market/recovery tests passed, including 10 new tests for
+  archive units, causal factors, date bounds, gaps, duplicates, metadata exclusions,
+  temporary transport recovery, proxy restoration, extended-range cache refresh,
+  and contradictions between bar dates and listing metadata. `pip check` passed.
+  Tests use isolated fixtures; production data is never replaced by test data.
+- The active old downloader and its guardian were not terminated. The guardian
+  starts a fresh Python worker after natural batch exit, so the next retry loads
+  the new implementation automatically. No overlapping production writer was
+  started. Immediate activation is not claimed while the old worker is alive.
+- Snapshot before deployment: 5,906 stocks, 5,596 complete, 309 failed, 1 running,
+  11,337,606 bars; latest bar 2026-09-30. The fixed batch end remains 2026-10-02.
+  Audit has not passed. No backtest, parameter tuning, `selector.py` or `risk.py`
+  changes were made. Chat heartbeat remains paused as the user requested.
+
+Reference: [AKShare stock documentation](https://akshare.akfamily.xyz/data/stock/stock.html).
 
 ## Recovery checkpoint (2026-10-02)
 
