@@ -360,6 +360,71 @@ macOS or Linux:
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
+## Frozen Phase 4 acceptance (2026-10-12)
+
+The first historical admission range is **2015-06-01 through 2026-09-30**.
+This does not cancel continuous real-data updates. October increments use the
+existing single downloader and checkpoints; the audit range never follows today.
+An optional ignored `data/a_share_201506_present.sync-plan.json` declares
+`historical_acceptance_end` and `incremental_target_end` for that downloader.
+
+Run an immediate preaudit even while retained symbols are failed:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m stock_picker.phase4_acceptance
+```
+
+The command pins a SQLite WAL read transaction, uses online backup (including
+committed WAL pages), hashes the independent snapshot, and runs the existing
+auditor with read-only connections. It never stops the downloader, edits live
+market rows, saves a passing audit to production, or calls a strategy. Frequent
+production writes cannot restart this pinned backup. A failed preaudit still
+writes a report; it is a data acceptance result, not an unhandled exception.
+
+Each ignored `outputs/phase4_acceptance/<timestamp>/` contains the frozen
+snapshot, identity/revision, `preaudit/` bundle, `phase5a_admission_report.json`,
+its readable `.txt` summary, `blockers.json`, and `outside_interval_review.json`.
+Every blocker has a security/index scope, dates, reason, and treatment plan.
+Snapshot hashes are verified before reuse. Reports are never Git artifacts.
+
+Source review is separate from admission and writes evidence, not market bars:
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.source_review --snapshot <snapshot-path> --output <source-review-json>
+.\.venv\Scripts\python.exe -m stock_picker.source_review --snapshot <snapshot-path> --output <source-review-json> --validate
+.\.venv\Scripts\python.exe -m stock_picker.phase4_acceptance --snapshot <snapshot-path> --evidence <source-review-json> --reuse-audit
+```
+
+The independent real Sina session calendar is compared with **each** benchmark
+and each applicable security. Unknown listing dates and unexplained suspensions
+remain provisional blockers, never fabricated sessions. Fresh exchange metadata
+is required to corroborate a whole-range exemption. Exempt records are retained
+and counted separately, not as complete market history. Missing historical
+universe/alias events, classifications, HFQ factor availability and exact limit
+history also prevent Phase 5A admission, even if sync counters reach 100%.
+
+AkShare/Eastmoney stays primary. The bounded Tencent BSE fallback bypasses the
+unsupported AkShare start-year helper, validates raw/HFQ dates, turnover units,
+OHLC/VWAP and persisted raw/HFQ overlap before switching sources. Empty BSE
+responses are failures, not proof of no data. No unverified old-code mapping is
+guessed; official alias evidence is still required for historical membership.
+
+One exact post-delisting weekend echo of the final real OHLCV/amount can be
+isolated only with exchange delisting metadata. The original row and comparison
+evidence stay in `provider_quarantine`, the real final session is retained, and
+unreviewed quarantine records **close** the formal audit gate. Other conflicts
+continue failing; delist dates are never moved to fit provider artifacts.
+
+`sync_retry_policy` retains failed states/checkpoints: persistent BSE failures
+back off for 1/2 hours, then require source review after three attempts; date
+conflicts require review immediately. Changed verified metadata/range can reopen
+the policy. Clearing a reviewed retry decision is not approval of market data.
+Repeated schema/permission errors are not retried as transient transport errors.
+
+No baseline returns, parameter optimization, selector or risk changes are part
+of this workflow. A preaudit is never a production backtest authorization.
+
 ## Moving to another computer
 
 Clone or copy the repository, install Python 3.10 or newer, then run the tests

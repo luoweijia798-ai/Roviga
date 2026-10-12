@@ -13,7 +13,9 @@ from typing import Any, Protocol
 
 from .historical import BenchmarkPoint, FutureDataError, HistoricalBar
 from .models import DailyBar
-from .sina_archive import fetch_sina_archive
+from .sina_archive import fetch_sina_archive, isolate_retired_terminal_duplicate
+from . import sync_retry
+from .tencent_bse import fetch_tencent_bse, verify_overlap
 
 
 PHASE4_START = date(2015, 6, 1)
@@ -457,6 +459,16 @@ class SQLiteMarketCache:
                 );
                 CREATE INDEX IF NOT EXISTS idx_sync_status_state
                     ON symbol_sync_status(status, symbol);
+                CREATE TABLE IF NOT EXISTS provider_quarantine (
+                    symbol TEXT NOT NULL, trading_date TEXT NOT NULL, source TEXT NOT NULL,
+                    evidence TEXT NOT NULL, review_status TEXT NOT NULL,
+                    PRIMARY KEY(symbol, trading_date, source)
+                );
+                CREATE TABLE IF NOT EXISTS sync_retry_policy (
+                    symbol TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+                    consecutive_failures INTEGER NOT NULL, next_retry_at TEXT NOT NULL,
+                    disposition TEXT NOT NULL, last_error TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -691,6 +703,7 @@ class AkShareAdapter:
         self._eastmoney_retry_at = 0.0
         self._eastmoney_last_error: Exception | None = None
         self._archive_cache: tuple[str, Any, Any, int] | None = None
+        self._bse_verified: set[str] = set()
         self._eastmoney_history_available: bool | None = (
             False if history_source == "sina" else None
         )
@@ -703,7 +716,9 @@ class AkShareAdapter:
     ) -> DataManifest:
         end_date = end_date or date.today()
         self._sync_start, self._sync_end = start_date, end_date
+        self._cache = cache
         self._archive_cache = None
+        self._bse_verified = set()
         ak = self._module()
         stocks = self._stock_universe(ak)
         if self.symbol_limit is not None:
@@ -744,8 +759,13 @@ class AkShareAdapter:
         for stock in stocks:
             previous = previous_statuses.get(stock.symbol)
             latest = cache.latest_bar_date(stock.symbol)
-            if stock.delist_date and stock.delist_date < start_date:
-                if latest and latest >= start_date:
+            outside_range = ((stock.delist_date and stock.delist_date < start_date)
+                             or (stock.list_date and stock.list_date > end_date))
+            if outside_range:
+                with cache.connect() as connection:
+                    in_range = connection.execute("SELECT COUNT(*) FROM bars WHERE symbol=? "
+                        "AND trading_date BETWEEN ? AND ?", (stock.symbol, start_date.isoformat(), end_date.isoformat())).fetchone()[0]
+                if in_range:
                     cache.save_sync_status(SymbolSyncStatus(
                         stock.symbol, "AkShare", "failed", start_date, end_date,
                         previous.synced_through if previous else None,
@@ -765,13 +785,16 @@ class AkShareAdapter:
                     end_date, cache.symbol_bar_count(stock.symbol),
                     previous.attempts if previous else 0,
                     stock.source + ":outside_requested_range",
-                    "No requested sessions: documented delisting before requested start",
+                    "No requested sessions: exchange listing/delisting metadata outside requested interval",
                 ))
                 continue
             if (previous and previous.status == "complete"
                     and previous.requested_start <= start_date
                     and previous.synced_through
                     and previous.synced_through >= end_date):
+                continue
+            if previous and previous.status == "failed" and not sync_retry.eligible(cache, stock, start_date, end_date):
+                failed_symbols.append(stock.symbol + ":DeferredSourceReview")
                 continue
             checkpoint = (
                 previous.synced_through
@@ -780,6 +803,8 @@ class AkShareAdapter:
                 else latest
             )
             fetch_start = max(start_date, checkpoint + timedelta(days=1)) if checkpoint else start_date
+            if stock.list_date:
+                fetch_start = max(fetch_start, stock.list_date)
             if previous and previous.requested_start > start_date:
                 fetch_start = start_date
             if stock.delist_date and previous and previous.status != "complete":
@@ -833,6 +858,7 @@ class AkShareAdapter:
                     )
                 except Exception as error:
                     failed = True
+                    sync_retry.failed(cache, stock, start_date, end_date, error)
                     failed_symbols.append(
                         f"{stock.symbol}:{type(error).__name__}"
                     )
@@ -847,6 +873,7 @@ class AkShareAdapter:
                     )
                     break
             if not failed:
+                sync_retry.clear(cache, stock.symbol)
                 total_bars = cache.symbol_bar_count(stock.symbol)
                 final_status = "complete" if total_bars else "unavailable"
                 cache.save_sync_status(
@@ -1044,6 +1071,17 @@ class AkShareAdapter:
                     _optional_date(row.get(delist_column)),
                     source=f"AkShare.{method_name}",
                 )
+        bse_function = getattr(ak, "stock_info_bj_name_code", None)
+        if bse_function is not None:
+            try:
+                bse = self._request(bse_function)
+                for _, row in bse.iterrows():
+                    symbol = str(row["证券代码"]).zfill(6)
+                    stocks[symbol] = StockInfo(symbol, str(row["证券简称"]), "BSE",
+                        list_date=_optional_date(row.get("上市日期")),
+                        source="AkShare.stock_info_bj_name_code")
+            except Exception:
+                pass  # Preserve inventory; audit identifies unverified dates.
         return sorted(stocks.values(), key=lambda item: item.symbol)
 
     def _fetch_symbol_bars(
@@ -1141,8 +1179,8 @@ class AkShareAdapter:
                     ak.stock_zh_a_hist, **arguments, adjust=""
                 )
                 if raw.empty:
-                    if stock.delist_date:
-                        raise ValueError("Eastmoney has no retired history; checking real archive")
+                    if stock.delist_date or stock.exchange == "BSE":
+                        raise ValueError("Eastmoney empty required history; checking verified fallback")
                     self._last_history_source = "AkShare.Eastmoney"
                     return raw, raw, 100
                 adjusted = self._request(
@@ -1174,12 +1212,30 @@ class AkShareAdapter:
                 end_date=getattr(self, "_sync_end", _as_date(arguments["end_date"])).isoformat(),
             )
             if not raw.empty and max(raw["date"]) > stock.delist_date:
-                raise ValueError(f"{stock.symbol}: archived trading after documented delisting")
+                if not hasattr(self, "_cache"):
+                    raise ValueError(f"{stock.symbol}: archived trading after documented delisting")
+                raw, adjusted = isolate_retired_terminal_duplicate(raw, adjusted, stock, self._cache)
             if raw.empty:
                 raise RuntimeError(f"{stock.symbol}: no retired archive rows in requested range; retained source gap")
             self._archive_cache = (stock.symbol, raw, adjusted, multiplier)
             return self._archive_segment(arguments)
         if stock.exchange == "BSE":
+            if hasattr(self, "_cache") and stock.list_date:
+                if stock.symbol not in self._bse_verified:
+                    with self._cache.connect() as connection:
+                        overlap = connection.execute("SELECT * FROM bars WHERE symbol=? AND trading_date<? "
+                            "ORDER BY trading_date DESC LIMIT 14", (stock.symbol, _as_date(arguments["start_date"]).isoformat())).fetchall()
+                    if overlap:
+                        old_raw, old_adjusted, _ = self._request(fetch_tencent_bse, symbol=stock.symbol,
+                            start_date=overlap[-1]["trading_date"], end_date=overlap[0]["trading_date"])
+                        verify_overlap(old_raw, old_adjusted, overlap, stock.symbol)
+                    self._bse_verified.add(stock.symbol)
+                raw, adjusted, multiplier = self._request(fetch_tencent_bse,
+                    symbol=stock.symbol,
+                    start_date=_as_date(arguments["start_date"]).isoformat(),
+                    end_date=_as_date(arguments["end_date"]).isoformat())
+                self._last_history_source = "AkShare-primary/Tencent.BSE.raw+HFQ"
+                return raw, adjusted, multiplier
             raise RuntimeError(
                 "BSE history unavailable from Eastmoney; Sina A-share fallback "
                 "does not support this exchange. Retained for source recovery. "
@@ -1227,6 +1283,12 @@ class AkShareAdapter:
             except Exception as error:
                 self._last_request_at = time.monotonic()
                 last_error = error
+                # Data/schema/permission errors cannot be repaired by repeating
+                # the identical request five times. Outer sync retains the row.
+                if isinstance(error, (ValueError, KeyError, TypeError)):
+                    break
+                if getattr(getattr(error, "response", None), "status_code", None) in {400, 401, 403, 404}:
+                    break
                 if attempt < self.max_attempts:
                     self._sleep(self.retry_delay * (2 ** (attempt - 1)))
         assert last_error is not None

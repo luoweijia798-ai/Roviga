@@ -87,3 +87,38 @@ def fetch_sina_archive(*, symbol: str, start_date: str, end_date: str,
     # Decode that object without eval or executing the trailing script.
     factors = json.JSONDecoder().raw_decode(payload)[0]["data"]
     return archive_frames(rows, factors, start, end)
+
+
+def isolate_retired_terminal_duplicate(raw: Any, adjusted: Any, stock: Any,
+                                       cache: Any) -> tuple[Any, Any]:
+    """Quarantine one exact weekend echo; any other conflict remains an error.
+
+    Preserve the original row in SQLite, never amend the exchange delist date.
+    The quarantine is not formal audit approval.
+    """
+    if not stock.delist_date or raw.empty or max(raw.date) <= stock.delist_date:
+        return raw, adjusted
+    later = raw[raw.date > stock.delist_date]
+    earlier = raw[raw.date < stock.delist_date]
+    if (len(later) != 1 or earlier.empty or len(raw[raw.date == stock.delist_date])
+            or stock.source not in {"AkShare.stock_info_sz_delist", "AkShare.stock_info_sh_delist"}):
+        raise ValueError(f"{stock.symbol}: archived trading after documented delisting")
+    echo, anchor = later.iloc[0], earlier.iloc[-1]
+    fields = ("open", "high", "low", "close", "volume", "amount")
+    if (echo.date.weekday() < 5 or (stock.delist_date - anchor.date).days > 7
+            or any(float(echo[k]) != float(anchor[k]) for k in fields)):
+        raise ValueError(f"{stock.symbol}: archived trading after documented delisting")
+    evidence = {"original": {key: str(value) for key, value in echo.items()},
+                "anchor": {key: str(value) for key, value in anchor.items()},
+                "delist_date": stock.delist_date.isoformat(), "metadata_source": stock.source,
+                "raw_source": "https://finance.sina.com.cn/realstock/company/" +
+                              ("sh" if stock.exchange == "SSE" else "sz") + stock.symbol + "/hisdata/klc_kl.js",
+                "reason": "one post-delisting weekend row exactly echoes final pre-delisting OHLCV+amount",
+                "review_status": "isolated_not_formally_approved"}
+    with cache.connect() as c:
+        cache._invalidate_audit(c)
+        c.execute("INSERT OR REPLACE INTO provider_quarantine VALUES (?,?,?,?,?)",
+                  (stock.symbol, echo.date.isoformat(), "Sina.KLC", json.dumps(evidence),
+                   "isolated_not_formally_approved"))
+    return (raw[raw.date <= stock.delist_date].copy(),
+            adjusted[adjusted.date <= stock.delist_date].copy())

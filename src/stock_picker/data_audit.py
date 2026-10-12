@@ -36,6 +36,7 @@ class RealMarketDataAuditor:
         revision = self.cache.data_revision
         manifest = self.cache.load_manifest()
         statuses = self.cache.sync_statuses()
+        interval = (start_date.isoformat(), end_date.isoformat())
         with self.cache.connect() as connection:
             stock_rows = connection.execute(
                 "SELECT * FROM stocks ORDER BY symbol"
@@ -44,8 +45,9 @@ class RealMarketDataAuditor:
                 """
                 SELECT name, MIN(trading_date) AS first_date,
                        MAX(trading_date) AS last_date, COUNT(*) AS row_count
-                FROM benchmarks GROUP BY name ORDER BY name
+                FROM benchmarks WHERE trading_date BETWEEN ? AND ? GROUP BY name ORDER BY name
                 """
+                , interval
             ).fetchall()
             reference_rows = connection.execute(
                 """
@@ -58,8 +60,9 @@ class RealMarketDataAuditor:
                 """
                 SELECT symbol, MIN(trading_date) AS first_date,
                        MAX(trading_date) AS last_date, COUNT(*) AS row_count
-                FROM bars GROUP BY symbol ORDER BY symbol
+                FROM bars WHERE trading_date BETWEEN ? AND ? GROUP BY symbol ORDER BY symbol
                 """
+                , interval
             ).fetchall()
             anomaly_rows = connection.execute(
                 """
@@ -102,7 +105,7 @@ class RealMarketDataAuditor:
                         THEN 'invalid_signal_price'
                     END AS reason
                 FROM bars
-                WHERE open <= 0 OR high <= 0 OR low <= 0 OR close <= 0
+                WHERE trading_date BETWEEN ? AND ? AND (open <= 0 OR high <= 0 OR low <= 0 OR close <= 0
                    OR high < MAX(open, close) OR low > MIN(open, close)
                    OR high < low OR volume < 0 OR amount < 0
                    OR (tradable = 1 AND volume = 0)
@@ -125,17 +128,22 @@ class RealMarketDataAuditor:
                        OR ABS(low - down_limit) >= 0.005
                        OR ABS(close - down_limit) >= 0.005))
                    OR signal_open <= 0 OR signal_high <= 0
-                   OR signal_low <= 0 OR signal_close <= 0
+                   OR signal_low <= 0 OR signal_close <= 0)
                 ORDER BY trading_date, symbol
                 """
+                , interval
             ).fetchall()
             duplicate_rows = connection.execute(
                 """
                 SELECT trading_date, symbol, COUNT(*) AS row_count
-                FROM bars GROUP BY trading_date, symbol HAVING COUNT(*) > 1
+                FROM bars WHERE trading_date BETWEEN ? AND ?
+                GROUP BY trading_date, symbol HAVING COUNT(*) > 1
                 ORDER BY trading_date, symbol
                 """
+                , interval
             ).fetchall()
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status!='approved'").fetchall() if "provider_quarantine" in tables else []
 
         reference_dates = tuple(row["trading_date"] for row in reference_rows)
         bars_by_symbol = {row["symbol"]: row for row in bar_coverage}
@@ -154,31 +162,16 @@ class RealMarketDataAuditor:
         delisted_symbols = {
             row["symbol"] for row in stock_rows if row["delist_date"]
         }
-        required_symbols = {
-            row["symbol"] for row in stock_rows
-            if (not row["delist_date"] or row["delist_date"] >= start_date.isoformat())
-            and (not row["list_date"] or row["list_date"] <= end_date.isoformat())
-        }
+        required_symbols = {row["symbol"] for row in stock_rows
+                            if stock_active_interval(row, start_date, end_date)[0]
+                            <= stock_active_interval(row, start_date, end_date)[1]}
         bse_symbols = {
             row["symbol"] for row in stock_rows if row["exchange"] == "BSE"
         }
         missing_by_symbol: list[dict[str, Any]] = []
-        for stock in stock_rows:
-            active_start = max(start_date, _optional_iso_date(stock["list_date"]) or start_date)
-            active_end = min(end_date, _optional_iso_date(stock["delist_date"]) or end_date)
-            if active_start > active_end:
-                continue
-            with self.cache.connect() as connection:
-                present = {
-                    row[0]
-                    for row in connection.execute(
-                        """
-                        SELECT trading_date FROM bars WHERE symbol=?
-                          AND trading_date BETWEEN ? AND ?
-                        """,
-                        (stock["symbol"], active_start.isoformat(), active_end.isoformat()),
-                    )
-                }
+        for stock, active_start, active_end, present in _symbol_session_sets(
+            self.cache, stock_rows, start_date, end_date
+        ):
             expected = [
                 value for value in reference_dates
                 if active_start.isoformat() <= value <= active_end.isoformat()
@@ -280,13 +273,14 @@ class RealMarketDataAuditor:
             "delisted_stocks_have_data": not delisted_symbols
             or all(symbol in bars_by_symbol for symbol in delisted_symbols & required_symbols),
             "bse_stocks_have_data": not bse_symbols
-            or all(symbol in bars_by_symbol for symbol in bse_symbols),
+            or all(symbol in bars_by_symbol for symbol in bse_symbols & required_symbols),
             "required_benchmarks_present": all(
                 name in benchmark_coverage for name in REQUIRED_BENCHMARKS
             ),
             "ohlcv_and_limit_checks_pass": not anomaly_details,
             "no_duplicate_daily_bars": not duplicate_details,
             "known_listing_dates_consistent_with_bars": not metadata_conflicts,
+            "provider_quarantines_formally_reviewed": not quarantine_rows,
             "trading_sessions_complete_or_explained": not any(
                 item["missing_count"] for item in missing_by_symbol
             ),
@@ -322,11 +316,18 @@ class RealMarketDataAuditor:
                     symbol in bars_by_symbol for symbol in delisted_symbols
                 ),
                 "bse_count": len(bse_symbols),
+                "required_bse_count": len(bse_symbols & required_symbols),
                 "bse_with_bars": sum(
                     symbol in bars_by_symbol for symbol in bse_symbols
                 ),
             },
-            "date_coverage": self._serializable_coverage(),
+            "date_coverage": {
+                "start_date": min((row["first_date"] for row in bar_coverage), default=None),
+                "end_date": max((row["last_date"] for row in bar_coverage), default=None),
+                "symbol_count": len(bar_coverage),
+                "bar_count": sum(int(row["row_count"]) for row in bar_coverage),
+            },
+            "global_date_coverage": self._serializable_coverage(),
             "average_trading_days_per_covered_stock": (
                 sum(int(row["row_count"]) for row in bar_coverage)
                 / len(bar_coverage)
@@ -345,6 +346,7 @@ class RealMarketDataAuditor:
             "per_symbol_missing_sessions": missing_by_symbol,
             "missing_stocks": missing_stocks,
             "stock_date_conflicts": metadata_conflicts,
+            "provider_quarantines": [dict(row) for row in quarantine_rows],
             "anomalies": {
                 "count": len(anomaly_details),
                 "rows": anomaly_details,
@@ -368,6 +370,31 @@ class RealMarketDataAuditor:
 
 def _optional_iso_date(value: object) -> date | None:
     return date.fromisoformat(str(value)) if value else None
+
+
+def _symbol_session_sets(cache, stocks, start, end):
+    # Reuse one read connection rather than opening thousands of SQLite files.
+    # Frozen acceptance uses SnapshotCache; the live auditor still revision-checks
+    # its final metadata save and must never approve a changing revision.
+    with cache.connect() as connection:
+        for stock in stocks:
+            active_start, active_end = stock_active_interval(stock, start, end)
+            if active_start > active_end:
+                continue
+            present = {row[0] for row in connection.execute(
+                "SELECT trading_date FROM bars WHERE symbol=? AND trading_date BETWEEN ? AND ?",
+                (stock["symbol"], active_start.isoformat(), active_end.isoformat()))}
+            yield stock, active_start, active_end, present
+
+
+def stock_active_interval(stock, start, end):
+    listing = _optional_iso_date(stock["list_date"])
+    delisting = _optional_iso_date(stock["delist_date"])
+    # These exchange endpoints document removal, not the final trading session.
+    # Unproven generic metadata retains conservative inclusive legacy semantics.
+    if delisting and stock["source"] in {"AkShare.stock_info_sz_delist", "AkShare.stock_info_sh_delist"}:
+        delisting -= timedelta(days=1)
+    return max(start, listing or start), min(end, delisting or end)
 
 
 def _missing_ranges(

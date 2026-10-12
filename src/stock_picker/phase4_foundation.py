@@ -62,6 +62,8 @@ class Phase4FoundationRunner:
         if manifest is None:
             raise DataCoverageError("real-market cache has no completed sync manifest")
         audit = self.cache.load_audit()
+        if audit and (audit.get("formal_gate_eligible") is False or audit.get("report_kind") == "preaudit"):
+            raise DataCoverageError("preaudit/snapshot report cannot authorize a formal backtest")
         if audit is None or not audit.get("passed"):
             raise DataCoverageError(
                 "real-market data audit has not passed; run the audit command first"
@@ -160,10 +162,25 @@ def main() -> None:
     parser.add_argument("--max-attempts", type=int, default=4)
     parser.add_argument("--retry-delay", type=float, default=1.0)
     parser.add_argument("--segment-days", type=int, default=366)
+    parser.add_argument("--sync-plan", type=Path,
+                        help="optional local split historical-acceptance/incremental plan")
     args = parser.parse_args()
 
     cache = SQLiteMarketCache(args.cache)
     if args.command == "sync":
+        # An explicit local plan lets the existing single guardian worker
+        # advance October without changing the frozen historical acceptance.
+        plan_path = args.sync_plan or args.cache.with_suffix(".sync-plan.json")
+        sync_end = args.end
+        if plan_path.exists():
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            if plan.get("historical_acceptance_end") != "2026-09-30":
+                raise ValueError("Phase4 acceptance end must remain 2026-09-30")
+            incremental_end = date.fromisoformat(plan["incremental_target_end"])
+            if incremental_end > date.today():
+                raise ValueError("incremental target cannot be a future date")
+            sync_end = max(sync_end, incremental_end)
+            print(f"historical acceptance fixed at 2026-09-30; separate incremental target={sync_end}", flush=True)
         adapter = (
             AkShareAdapter(
                 symbol_limit=args.symbol_limit,
@@ -177,7 +194,7 @@ def main() -> None:
             if args.provider == "akshare"
             else TushareAdapter()
         )
-        manifest = adapter.sync(cache, PHASE4_START, args.end)
+        manifest = adapter.sync(cache, PHASE4_START, sync_end)
         print(json.dumps(_display_manifest(manifest), indent=2, ensure_ascii=False))
     elif args.command == "status":
         manifest = cache.load_manifest()
