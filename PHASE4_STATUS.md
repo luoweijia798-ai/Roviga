@@ -120,9 +120,27 @@ Checkpoint date: 2026-10-13
   `0d7c85a26e45668b35d0d0aeb763289376cfc039e55e0938a617ed0dfa32e433`.
   Its own executable/helper/DLL tree is used together, never mixed with the
   incomplete distribution. HTTPS helper is in its `mingw64/bin` directory.
-  GitHub CLI keyring authentication and live REST ref queries work; Git smart-HTTP
-  attempts currently encounter connection resets, which are a separate network
-  problem, not evidence of invalid credentials. No password/token was printed.
+  GitHub CLI keyring authentication and live REST ref queries work. Initial Git
+  smart-HTTP attempts encountered connection resets/timeouts, a separate network
+  problem, not invalid credentials. The final bounded HTTP/1.1 push succeeded:
+  code commit `314f70ffcf19e778138502c6e0e6512fec53df0b` was verified on remote
+  `refs/heads/main` by **both live ls-remote and GitHub REST**, matching local HEAD
+  at that checkpoint (this documentation confirmation follows it). No password
+  or token was printed. Future commands should use the complete executable at
+  `../work/tools/mingit-2.53.0.3/runtime/cmd/git.exe`, not the incomplete runtime
+  still selected by the preexisting system PATH. The successful command used
+  per-command GitHub CLI keyring credential handling; no global Git/DLL/PATH change.
+- Reachable-history scan examined **109 source blobs**, and staged-content plus
+  tracked-path checks found no matching credential patterns, databases, runtime
+  environments, caches or generated reports. Ignore rules additionally cover
+  nested SQLite sidecars, `.env`, logs and offline bundles. This is a bounded
+  pattern/content review, not a claim that every possible secret format is detectable.
+- Additional offline backup outside the repository:
+  `../work/backups/Roviga-314f70f-phase4-batch2-20261013.bundle`.
+  `git bundle verify` passed and confirms complete history through the code commit.
+  SHA256 `f01d539d2de3a515e67773b5a450ffc2ffc85f4178fd32e59b2ba2a79184aa02`.
+  It is a local recovery artifact, not itself off-site backup; the separate
+  successful GitHub push above establishes remote code backup.
 
 ### Local deliverables and remaining work
 
