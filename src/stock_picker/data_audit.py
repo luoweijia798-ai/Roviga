@@ -142,6 +142,11 @@ class RealMarketDataAuditor:
                 """
                 , interval
             ).fetchall()
+            unexpected_sessions = connection.execute(
+                "SELECT b.symbol,b.trading_date FROM bars b LEFT JOIN benchmarks r "
+                "ON r.name='CSI300' AND r.trading_date=b.trading_date "
+                "WHERE b.trading_date BETWEEN ? AND ? AND r.trading_date IS NULL "
+                "ORDER BY b.trading_date,b.symbol", interval).fetchall()
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status!='approved'").fetchall() if "provider_quarantine" in tables else []
 
@@ -262,6 +267,7 @@ class RealMarketDataAuditor:
             blockers.append(f"{len(duplicate_details)} duplicate daily bars")
 
         audit_checks = {
+            "persisted_dates_match_reference_sessions": not unexpected_sessions,
             "sync_manifest_covers_requested_range": manifest is not None
             and manifest.start_date <= start_date
             and manifest.end_date >= end_date,
@@ -346,6 +352,7 @@ class RealMarketDataAuditor:
             "per_symbol_missing_sessions": missing_by_symbol,
             "missing_stocks": missing_stocks,
             "stock_date_conflicts": metadata_conflicts,
+            "unexpected_reference_sessions": [dict(row) for row in unexpected_sessions],
             "provider_quarantines": [dict(row) for row in quarantine_rows],
             "anomalies": {
                 "count": len(anomaly_details),

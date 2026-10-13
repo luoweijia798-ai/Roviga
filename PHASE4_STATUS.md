@@ -2,6 +2,74 @@
 
 Checkpoint date: 2026-10-12
 
+## Phase 4 data-semantics repair, batch 1 (2026-10-13)
+
+- Working baseline verified at `684ce4683802b0e6d56044a5106e3fd12c94a522`.
+  The historical acceptance interval remains **2015-06-01..2026-09-30**;
+  October synchronization remains a separate track. No selector/risk logic or
+  strategy parameter changed. No returns or formal backtest were run.
+- Read-only after-version audit snapshot: `sha256:650ad3103fd017595c5cfc57af4ad47cc167bf62365fa0a68adb906f9d4291f6`,
+  revision 80101. It contains 5,907 securities and 11,479,110 bars in range,
+  spanning 2015-06-01..2026-09-30. The admission bundle classifies 2,529
+  histories complete, 87 whole-interval exemptions supported by separate
+  evidence, and 3,291 missing or conflicting. Exemptions are not counted as
+  downloaded history. CSI300 and CSI1000 each have 2,757 sessions and match the
+  independent calendar; historical index constituents are still unverified.
+- Batch exchange metadata filled the 5,225 missing listing dates to zero in the
+  5,907-security snapshot. Three SSE A-share dates previously mapped from
+  issuer-level B-share rows were corrected using an A-only raw exchange response;
+  old observations remain journaled. Security IDs/ISIN, code-validity periods,
+  and official last-trade dates remain unknown where no direct source was found.
+  Listing date was never inferred from the first local bar.
+- Missing-session accounting now reconciles all 16,285,599 security-calendar
+  pairs: 4,101,050 pre-listing, 452,183 post-delisting, 253,264 active but
+  unexplained, 0 independently confirmed suspensions, and 0 proven real losses.
+  Thus zero confirmed loss/suspension does not mean the 253,264 gaps are explained.
+  Coverage is separately reconciled as 5,820 inside-range securities and 87
+  outside-range securities; all 5,820 have at least one bar, with no bars for
+  the 87 verified whole-interval exemptions.
+- Quality accounting preserves the earlier 68,775 first-reason marks and
+  identifies 68,819 all-applicable marks on 68,783 distinct security-date rows
+  across 3,817 securities. Marks: missing VWAP 3,027; close above limit 31,395;
+  close below limit 34,388; invalid limit ordering 1; unexpected reference
+  session 8. Disjoint primary root counts: turnover/unit/mode/scope unresolved
+  2,992 rows; current ST-name backcast 51,573; IPO/ex-right/reference/rule
+  unknown 6,983; Chinext ST-priority bug 7,227; weekend capital-date merge
+  artifact pending original-byte replay 8. Same-date duplicates and OHLC
+  contradictions are zero in the persisted checks. No price, volume, amount, or
+  VWAP was rewritten. Source/year/error distributions and reproducible samples
+  are in the ignored audit output.
+- The 8 extra weekend dates are retained as individual blockers: 300462 on
+  2017-09-30; 000415, 000711, 000796, 002051, 002082, 300238 on 2018-06-30;
+  and 300324 on 2018-09-30. The pattern matches the former AkShare Sina path's
+  share-capital-date outer merge/forward fill; per-bar original responses are
+  unavailable, so the exact historical cause remains pending raw replay. The
+  live adapter now selects actual KLC quote dates without that merge. Its native
+  decoder could not be live-validated in this Windows run (`WinError4551` blocks
+  loading MiniRacer); mocked unit coverage passed and no security policy was
+  bypassed. These rows are neither deleted nor approved for trading.
+- BSE review: 920396's 14-day raw/adjusted overlap now passes the unchanged
+  half-tick Decimal comparison; source-factor causality remains unapproved.
+  920014, 920639, 920765, 920833, and 920970 still have material HFQ conflicts.
+  920371 (2026-09-04), 920375 (2026-09-11), and 920701 (2026-09-28) show
+  negotiated-trade scope evidence for volume/amount mismatches; diagnostic
+  residual averages are not execution VWAPs. All 9 remain in the per-case review.
+- Current baseline dependency review found 2,733 securities already listed at
+  the acceptance start with in-range bars but no pre-window bar. The selector
+  reads prior `signal_close`, so the first-session input is unresolved for
+  these securities. OHLC/volume/tradability/lock fields are stored, but volume
+  scope, historical execution locks, point-in-time stock universe, and causal
+  adjustment history remain unverified. Industry/concept/policy/fundamental and
+  constituent-selection data are not consumed by the current baseline and are
+  not added as gates. See `baseline_required_fields.json` for actual field reads.
+- 51 focused unit tests pass, including a regression test that creates an
+  unexpected-session blocker while retaining the stored source row. The fresh
+  audit output and detailed blocker bundle are under ignored
+  `outputs/phase4_batch1/20261013T042113774108Z/final_reaudit/`; no database,
+  report, cache, environment, or credentials are Git artifacts. Formal return
+  backtesting remains blocked; this batch does not release the gate or start
+  Phase 5A.
+
 ## Frozen historical acceptance and source review (2026-10-12)
 
 - First acceptance range is fixed at **2015-06-01..2026-09-30**. Continuous

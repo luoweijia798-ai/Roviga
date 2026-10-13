@@ -368,6 +368,23 @@ existing single downloader and checkpoints; the audit range never follows today.
 An optional ignored `data/a_share_201506_present.sync-plan.json` declares
 `historical_acceptance_end` and `incremental_target_end` for that downloader.
 
+For the Phase 4 semantic-repair snapshot, run a fresh read-only preaudit and
+produce per-security blockers, gap accounting, source/root distributions, and
+baseline dependency review (no strategy or return calculation):
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m stock_picker.data_semantics `
+  --snapshot <frozen-snapshot.sqlite> `
+  --source-review <source-review.json> `
+  --output <ignored-output-directory>
+```
+
+The output contains `final_reaudit.txt/json`, `preaudit/`, and an `admission/`
+bundle with the blocker details. It is runtime evidence and stays under ignored
+`outputs/`; never commit the snapshot or generated reports. A report with failed
+checks is still emitted and does not release the formal-backtest gate.
+
 Run an immediate preaudit even while retained symbols are failed:
 
 ```powershell

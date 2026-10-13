@@ -170,8 +170,8 @@ class SQLiteMarketCache:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET
                     name=excluded.name, exchange=excluded.exchange,
-                    list_date=COALESCE(excluded.list_date, stocks.list_date),
-                    delist_date=COALESCE(excluded.delist_date, stocks.delist_date),
+                    list_date=COALESCE(stocks.list_date, excluded.list_date),
+                    delist_date=COALESCE(stocks.delist_date, excluded.delist_date),
                     industry=COALESCE(excluded.industry, stocks.industry),
                     source=excluded.source
                 """,
@@ -1041,6 +1041,27 @@ class AkShareAdapter:
             )
             for _, row in frame.iterrows()
         }
+        # The aggregate code/name interface discards all listing dates. Reuse
+        # its cached exchange batch frames, rather than one request per stock.
+        from .security_master import SPECS, canonical_code, verified_date
+        for method_name, argument, exchange, code_column, date_column, _, _ in SPECS[:3]:
+            function = getattr(ak, method_name, None)
+            if function is None:
+                continue
+            try:
+                batch = self._request(function, symbol=argument)
+                if code_column not in batch or date_column not in batch:
+                    continue
+                for _, row in batch.iterrows():
+                    code = canonical_code(row[code_column])
+                    listing = verified_date(row[date_column])
+                    if code in stocks and listing and stocks[code].exchange == exchange:
+                        old = stocks[code]
+                        stocks[code] = StockInfo(old.symbol, old.name, old.exchange,
+                            date.fromisoformat(listing), old.delist_date, old.industry,
+                            "AkShare." + method_name)
+            except Exception:
+                pass  # Keep unknown, never substitute the earliest bar date.
         specifications = (
             ("stock_info_sh_delist", "全部", "公司代码", "公司简称", "暂停上市日期"),
             (
@@ -1056,7 +1077,11 @@ class AkShareAdapter:
             if function is None:
                 continue
             try:
-                delisted = self._request(function, symbol=argument)
+                if method_name == "stock_info_sh_delist" and getattr(ak, "__name__", None) == "akshare":
+                    from .security_master import fetch_sse_a_retired
+                    delisted = self._request(fetch_sse_a_retired)
+                else:
+                    delisted = self._request(function, symbol=argument)
             except Exception:
                 continue
             for _, row in delisted.iterrows():
@@ -1242,6 +1267,17 @@ class AkShareAdapter:
                 f"Primary error: {eastmoney_error}"
             ) from eastmoney_error
         sina_function = getattr(ak, "stock_zh_a_daily", None)
+        if getattr(ak, "__name__", None) == "akshare":
+            # Pinned stock_zh_a_daily outer-merges outstanding-share dates,
+            # forward-fills OHLCV, and drops identical rows across DIFFERENT
+            # dates. Use only actual KLC sessions and causal dated factors.
+            prefix = "sh" if stock.exchange == "SSE" else "sz"
+            raw, adjusted, multiplier = self._request(fetch_sina_archive,
+                symbol=prefix + stock.symbol,
+                start_date=_as_date(arguments["start_date"]).isoformat(),
+                end_date=_as_date(arguments["end_date"]).isoformat())
+            self._last_history_source = "AkShare.SinaArchive.KLC+HFQ"
+            return raw, adjusted, multiplier
         if sina_function is None:
             if eastmoney_error is not None:
                 raise eastmoney_error
@@ -1596,12 +1632,12 @@ def _infer_limits(
 ) -> tuple[float | None, float | None]:
     if previous_close is None:
         return None, None
-    if "ST" in name.upper():
-        ratio = Decimal("0.05")
-    elif symbol.startswith(("300", "301")) and trading_date >= date(2020, 8, 24):
+    if symbol.startswith(("300", "301")) and trading_date >= date(2020, 8, 24):
         ratio = Decimal("0.20")
     elif symbol.startswith(("688", "689")):
         ratio = Decimal("0.20")
+    elif "ST" in name.upper():
+        ratio = Decimal("0.05")
     elif symbol.startswith(("4", "8", "9")):
         ratio = Decimal("0.30")
     else:

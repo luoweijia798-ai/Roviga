@@ -85,6 +85,12 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
     with cache.connect() as c:
         stocks = [dict(r) for r in c.execute("SELECT * FROM stocks ORDER BY symbol")]
         statuses = {r["symbol"]: dict(r) for r in c.execute("SELECT * FROM symbol_sync_status")}
+        table_names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        verified_listing_observations = set()
+        if "security_master_observations" in table_names:
+            for row in c.execute("SELECT symbol,payload FROM security_master_observations WHERE verification_status='exchange_listing_date_verified'"):
+                observation = json.loads(row["payload"])
+                verified_listing_observations.add((row["symbol"], observation.get("list_date")))
         benchmark_dates = {name: {r[0] for r in c.execute(
             "SELECT trading_date FROM benchmarks WHERE name=? AND trading_date BETWEEN ? AND ?",
             (name, start, end))} for name in ("CSI300", "CSI1000")}
@@ -133,7 +139,8 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
                 proof = evidence.get(key, {}).get("rows", {}).get(symbol, {})
                 independent = (delisting and proof.get("delist_date") == delisting)
                 if listing and listing > end:
-                    independent = source_review.get("official_listing_date") == listing
+                    independent = (source_review.get("official_listing_date") == listing
+                                   or (symbol, listing) in verified_listing_observations)
                 category = "whole_interval_exempt" if independent and not observed else "missing_or_conflicting"
                 outside_review.append({"symbol": symbol, "category": category,
                     "list_date": listing, "delist_date": delisting, "bars_in_interval": len(observed),
@@ -179,6 +186,11 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
             plan = ("Verify historical ST/IPO/board/delisting rules and ex-right reference price; obtain exact point-in-time limits"
                     if "limit" in r["reason"] else "Reconcile raw turnover units/OHLC and actual amount/volume; preserve conflicting rows")
             block(r["symbol"], r["trading_date"], r["trading_date"], r["reason"], plan)
+    for r in audit.get("unexpected_reference_sessions", []):
+        if start <= r["trading_date"] <= end:
+            block(r["symbol"], r["trading_date"], r["trading_date"],
+                  "unexpected_reference_session",
+                  "Check the original provider response and independent exchange calendar; retain the source row and quarantine evidence until its trading-session status is verified")
     for r in audit["duplicates"]["rows"]:
         block(r["symbol"], r["trading_date"], r["trading_date"], "duplicate_bar", "Resolve source provenance before any deduplication")
     for r in audit["stock_date_conflicts"]:
@@ -191,12 +203,12 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
     # Current inventory + retained delists is not proof of a point-in-time universe.
     for reason, plan in (
         ("historical_universe_unverified", "Reconcile exchange historical listing/delisting/renaming events, BSE and NEEQ identities; archive evidence with availability dates"),
-        ("classification_causality_unverified", "Obtain effective/available-dated industry and membership history; current snapshots cannot be backdated"),
         ("adjustment_causality_unverified", "Reconcile source HFQ factor history and publication dates, cross-source normalization and source switches; HFQ label alone is insufficient"),
         ("exact_limit_and_suspension_history_unverified", "Obtain historical risk-warning states, corporate actions, suspension sessions and exact price limits"),
     ):
         block("ALL", start, end, reason, plan)
     warnings.append("CSI300/CSI1000 checks verify index price series, not historical constituent membership; constituent scope remains unverified")
+    warnings.append("Current selector/risk/execution do not consume industry/concept/policy classifications or index constituent membership; these enhancement datasets are not baseline admission blockers. Historical ST/board/limit evidence remains required for execution locks.")
     for symbol, review in evidence.get("stocks", {}).items():
         listing = review.get("official_listing_date")
         if (review.get("exchange") == "BSE" and listing and listing <= end
@@ -224,6 +236,7 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
         "stock_coverage": per_stock, "outside_interval_review": outside_review,
         "benchmark_coverage": benchmarks, "calendar": {k:v for k,v in calendar.items() if k!='dates'},
         "causal_requirements": {"historical_universe_verified": False, "classification_history_verified": False,
+            "classification_required_by_current_baseline": False,
             "hfq_factor_availability_verified": False, "classification_rows": classification_rows,
             "classification_rows_available_at_start": classification_historical},
         "passed_items": audit["passed_items"], "warnings": warnings,

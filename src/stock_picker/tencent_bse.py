@@ -4,8 +4,15 @@ from __future__ import annotations
 import math
 import time
 from datetime import date
+from decimal import Decimal
 
 URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+
+
+def price_conflict(left, right) -> bool:
+    # Preserve the existing exact half-tick tolerance. Binary float subtraction
+    # turns 34.52 - 34.515 into 0.005000000000002558 and falsely rejects equality.
+    return abs(Decimal(str(left))-Decimal(str(right))) > Decimal("0.005")
 
 
 def frame_from_payload(payload, symbol, start_date, end_date, *, adjusted=False):
@@ -39,7 +46,7 @@ def frame_from_payload(payload, symbol, start_date, end_date, *, adjusted=False)
             # and amount in 10,000 yuan. Require raw VWAP to corroborate units.
             vwap = row["amount"] / (row["volume"] * 100)
             if not row["low"] - 0.005 <= vwap <= row["high"] + 0.005:
-                raise ValueError(f"{symbol}: Tencent volume/amount units fail raw VWAP validation on {trading_date}: "
+                raise ValueError(f"{symbol}: Tencent volume/amount, price mode or trade scope fail raw VWAP comparability on {trading_date}: "
                                  f"vwap={vwap}, low={row['low']}, high={row['high']}, volume_lots={row['volume']}, amount_yuan={row['amount']}")
         rows.append(row)
     frame = pd.DataFrame(rows, columns=("date", "open", "high", "low", "close", "volume", "amount"))
@@ -79,9 +86,9 @@ def verify_overlap(raw, adjusted, persisted, symbol) -> None:
         if day not in raw_by_date or day not in adjusted_by_date:
             raise ValueError(f"{symbol}: source-switch overlap missing {day}")
         row, adj = raw_by_date[day], adjusted_by_date[day]
-        if (any(abs(row[k]-old[k]) > .005 for k in ("open", "high", "low", "close"))
+        if (any(price_conflict(row[k],old[k]) for k in ("open", "high", "low", "close"))
                 or int(row.volume * 100) != old["volume"] or abs(row.amount-old["amount"]) > 51):
             raise ValueError(f"{symbol}: source-switch raw units/prices conflict on {day}")
-        if any(old["signal_"+k] is None or abs(adj[k]-old["signal_"+k]) > .005
+        if any(old["signal_"+k] is None or price_conflict(adj[k],old["signal_"+k])
                for k in ("open", "high", "low", "close")):
             raise ValueError(f"{symbol}: source-switch HFQ convention conflicts on {day}; retain for factor reconciliation")
