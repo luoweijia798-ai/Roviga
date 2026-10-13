@@ -11,8 +11,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .data_audit import RealMarketDataAuditor
-from .data_audit import _missing_ranges, stock_active_interval
-from .real_market import PHASE4_START, SQLiteMarketCache, _ClosingConnection
+from .data_audit import _missing_ranges, stock_active_interval, load_session_explanations
+from .real_market import PHASE4_START, SQLiteMarketCache, _ClosingConnection, _install_accepted_view
 
 ACCEPTANCE_END = date(2026, 9, 30)
 
@@ -27,6 +27,7 @@ class SnapshotCache(SQLiteMarketCache):
         connection = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro",
                                      uri=True, factory=_ClosingConnection)
         connection.row_factory = sqlite3.Row
+        _install_accepted_view(connection)
         return connection
 
     def save_audit(self, payload: dict[str, object]) -> None:
@@ -121,16 +122,19 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
         categories = Counter({"real_history_complete": 0, "segment_exempt": 0,
                               "whole_interval_exempt": 0, "missing_or_conflicting": 0})
         outside_review, per_stock = [], []
+        session_explanations=load_session_explanations(c)
         for stock in stocks:
             symbol = stock["symbol"]
             listing, delisting = stock["list_date"], stock["delist_date"]
             status = statuses.get(symbol, {})
-            observed = {r[0] for r in c.execute("SELECT trading_date FROM bars WHERE symbol=? "
+            observed = {r[0] for r in c.execute("SELECT trading_date FROM accepted_bars WHERE symbol=? "
                 "AND trading_date BETWEEN ? AND ?", (symbol, start, end))}
             active_first, active_last = stock_active_interval(stock, date.fromisoformat(start), date.fromisoformat(end))
             active_start, active_end = str(active_first), str(active_last)
             expected = [d for d in reference if active_start <= d <= active_end]
-            missing = set(expected) - observed
+            physical_missing=set(expected)-observed
+            explained=physical_missing & session_explanations.get(symbol,set())
+            missing=physical_missing-explained
             ranges = _missing_ranges(expected, missing)
             outside = active_start > active_end
             source_review = evidence.get("stocks", {}).get(symbol, {})
@@ -169,9 +173,10 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
                 "list_date": listing, "delist_date": delisting, "first": min(observed) if observed else None,
                 "last": max(observed) if observed else None, "row_count": len(observed),
                 "expected_sessions": len(expected), "missing_count": len(missing), "missing_ranges": ranges,
+                "physical_missing_count": len(physical_missing), "independent_full_day_suspension_count": len(explained),
                 "source": status.get("source"), "sync_status": status.get("status"),
                 "complete_status_is_not_audit_pass": True})
-        extra = [dict(r) for r in c.execute("SELECT symbol,trading_date FROM bars WHERE trading_date BETWEEN ? AND ? "
+        extra = [dict(r) for r in c.execute("SELECT symbol,trading_date FROM accepted_bars WHERE trading_date BETWEEN ? AND ? "
             "AND (signal_open IS NULL OR signal_high IS NULL OR signal_low IS NULL OR signal_close IS NULL)", (start, end))]
         for r in extra:
             block(r["symbol"], r["trading_date"], r["trading_date"], "missing_adjusted_price",
@@ -197,7 +202,7 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
         block(r["symbol"], r["first_bar"], r["last_bar"], "listing_metadata_conflict",
               "Verify exchange events and retain original rows in quarantine, not delete stock", evidence=r)
     for r in quarantines:
-        if r["review_status"] != "approved":
+        if r["review_status"] not in {"approved","confirmed_non_session_excluded"}:
             block(r["symbol"], r["trading_date"], r["trading_date"], "quarantine_not_formally_approved",
                   "Review saved original weekend echo and official final-session evidence; do not silently approve", evidence=json.loads(r["evidence"]))
     # Current inventory + retained delists is not proof of a point-in-time universe.

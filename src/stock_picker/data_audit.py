@@ -13,6 +13,28 @@ from .real_market import PHASE4_START, SQLiteMarketCache
 REQUIRED_BENCHMARKS = ("CSI300", "CSI1000")
 
 
+def load_session_explanations(connection):
+    tables={r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    result={}
+    if 'session_evidence' in tables:
+        for symbol,day in connection.execute("SELECT symbol,trading_date FROM session_evidence WHERE status='verified_full_day_suspension'"):
+            result.setdefault(symbol,set()).add(day)
+    return result
+
+
+def full_day_event_dates(event, reference):
+    """Use explicit event bounds, never a forecast resume date or an empty quote."""
+    start=event.get('SUSPEND_START_TIME');end=event.get('SUSPEND_END_TIME')
+    if not start or not end:return []
+    try:
+        first=datetime.fromisoformat(start);last=datetime.fromisoformat(end)
+    except (TypeError,ValueError):return []
+    if last<first:return []
+    return [day for day in reference
+            if first<=datetime.fromisoformat(day+'T09:30:00')
+            and last>=datetime.fromisoformat(day+'T15:00:00')]
+
+
 @dataclass(frozen=True, slots=True)
 class DataAuditResult:
     passed: bool
@@ -60,7 +82,7 @@ class RealMarketDataAuditor:
                 """
                 SELECT symbol, MIN(trading_date) AS first_date,
                        MAX(trading_date) AS last_date, COUNT(*) AS row_count
-                FROM bars WHERE trading_date BETWEEN ? AND ? GROUP BY symbol ORDER BY symbol
+                FROM accepted_bars WHERE trading_date BETWEEN ? AND ? GROUP BY symbol ORDER BY symbol
                 """
                 , interval
             ).fetchall()
@@ -104,7 +126,7 @@ class RealMarketDataAuditor:
                         OR signal_low <= 0 OR signal_close <= 0
                         THEN 'invalid_signal_price'
                     END AS reason
-                FROM bars
+                FROM accepted_bars
                 WHERE trading_date BETWEEN ? AND ? AND (open <= 0 OR high <= 0 OR low <= 0 OR close <= 0
                    OR high < MAX(open, close) OR low > MIN(open, close)
                    OR high < low OR volume < 0 OR amount < 0
@@ -136,19 +158,20 @@ class RealMarketDataAuditor:
             duplicate_rows = connection.execute(
                 """
                 SELECT trading_date, symbol, COUNT(*) AS row_count
-                FROM bars WHERE trading_date BETWEEN ? AND ?
+                FROM accepted_bars WHERE trading_date BETWEEN ? AND ?
                 GROUP BY trading_date, symbol HAVING COUNT(*) > 1
                 ORDER BY trading_date, symbol
                 """
                 , interval
             ).fetchall()
             unexpected_sessions = connection.execute(
-                "SELECT b.symbol,b.trading_date FROM bars b LEFT JOIN benchmarks r "
+                "SELECT b.symbol,b.trading_date FROM accepted_bars b LEFT JOIN benchmarks r "
                 "ON r.name='CSI300' AND r.trading_date=b.trading_date "
                 "WHERE b.trading_date BETWEEN ? AND ? AND r.trading_date IS NULL "
                 "ORDER BY b.trading_date,b.symbol", interval).fetchall()
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status!='approved'").fetchall() if "provider_quarantine" in tables else []
+            session_explanations = load_session_explanations(connection)
+            quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status NOT IN ('approved','confirmed_non_session_excluded')").fetchall() if "provider_quarantine" in tables else []
 
         reference_dates = tuple(row["trading_date"] for row in reference_rows)
         bars_by_symbol = {row["symbol"]: row for row in bar_coverage}
@@ -181,7 +204,9 @@ class RealMarketDataAuditor:
                 value for value in reference_dates
                 if active_start.isoformat() <= value <= active_end.isoformat()
             ]
-            missing = [value for value in expected if value not in present]
+            physical_missing = set(expected)-present
+            explained = physical_missing & session_explanations.get(stock['symbol'],set())
+            missing = sorted(physical_missing-explained)
             coverage = bars_by_symbol.get(stock["symbol"])
             missing_by_symbol.append(
                 {
@@ -193,6 +218,8 @@ class RealMarketDataAuditor:
                     "bar_count": int(coverage["row_count"]) if coverage else 0,
                     "expected_sessions": len(expected),
                     "missing_count": len(missing),
+                    "physical_missing_count": len(physical_missing),
+                    "independent_full_day_suspension_count": len(explained),
                     "listing_date_known": bool(stock["list_date"]),
                     "missing_session_note": (
                         "Unexplained sessions, not confirmed data loss: suspension "
@@ -389,7 +416,7 @@ def _symbol_session_sets(cache, stocks, start, end):
             if active_start > active_end:
                 continue
             present = {row[0] for row in connection.execute(
-                "SELECT trading_date FROM bars WHERE symbol=? AND trading_date BETWEEN ? AND ?",
+                "SELECT trading_date FROM accepted_bars WHERE symbol=? AND trading_date BETWEEN ? AND ?",
                 (stock["symbol"], active_start.isoformat(), active_end.isoformat()))}
             yield stock, active_start, active_end, present
 

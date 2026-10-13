@@ -17,3 +17,14 @@ phase4_sync_status.json.tmp
 logs/
 data/*.lock
 data/*.sync-plan.json
+
+# Evidence, credentials and offline backups must never become source artifacts.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.bundle
+*.log
+.env
+.env.*
+!.env.example

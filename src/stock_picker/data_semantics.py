@@ -10,7 +10,7 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from .data_audit import RealMarketDataAuditor, stock_active_interval, _missing_ranges
+from .data_audit import RealMarketDataAuditor, stock_active_interval, _missing_ranges, load_session_explanations
 from .phase4_acceptance import SnapshotCache, admission_report, write_admission, verify_snapshot
 
 
@@ -39,6 +39,13 @@ def baseline_dependencies() -> dict:
         "reserved_not_baseline_gate": ["industry/concept rotation", "policy factors", "financial fundamentals", "historical index constituent selection"],
         "known_baseline_blockers": ["unverified historical pool/code events and BSE/selected-layer eligibility",
             "unverified adjustment publication/normalization", "historical ST/reference/limit-lock evidence", "unexplained active-session gaps"],
+        "history_readiness": {
+            "signal_close_momentum": {"prior_actual_quotes":1, "semantics":"last observed quote, not automatically previous exchange session", "ready":"real pre-window quote with verified numerical adjusted-price seam; factor publication causality remains separate"},
+            "market_regime_display": {"total_closes":20,"pre_window_closes":19,"current_day_included":True,"benchmark":"CSI300","role":"existing display label, not a strategy eligibility filter"},
+            "benchmark_comparison": {"formal_first_close_required":True,"warmup_returns_excluded":True},
+            "moving_average_breakout_volatility": {"enabled":False,"additional_warmup_requirement":0},
+            "orders_positions_returns": "none during warmup; fixed formal trading_dates 2015-06-01 through 2026-09-30; portal history can read earlier real observations"
+        },
         "source_hashes": {name: hashlib.sha256((base/name).read_bytes()).hexdigest() for name in
             ("selector.py", "risk.py", "backtest.py", "trading.py", "historical.py", "real_market.py")},
         "notes": ["No field removed/defaulted and no strategy parameter changed.",
@@ -130,11 +137,15 @@ def gap_accounting(cache, reference):
     reference_set = set(reference)
     with cache.connect() as c:
         inventory = c.execute("SELECT * FROM stocks ORDER BY symbol").fetchall()
+        session_explanations=load_session_explanations(c)
         for s in inventory:
-            present = {r[0] for r in c.execute("SELECT trading_date FROM bars WHERE symbol=? AND trading_date BETWEEN ? AND ?", (s["symbol"],reference[0],reference[-1]))}
+            present = {r[0] for r in c.execute("SELECT trading_date FROM accepted_bars WHERE symbol=? AND trading_date BETWEEN ? AND ?", (s["symbol"],reference[0],reference[-1]))}
             first,last = stock_active_interval(s,date.fromisoformat(reference[0]),date.fromisoformat(reference[-1]))
             active = [d for d in reference if str(first)<=d<=str(last)]
             unknown = set(active)-present
+            confirmed=unknown & session_explanations.get(s['symbol'],set())
+            counts['confirmed_suspension']+=len(confirmed)
+            unknown-=confirmed
             pre = {d for d in reference if s["list_date"] and d<s["list_date"] and d not in present}
             post = {d for d in reference if s["delist_date"] and d>str(last) and d not in present}
             # Count missing sessions only; lifecycle conflicts on observed rows are separate.
@@ -148,7 +159,7 @@ def gap_accounting(cache, reference):
             stocks.append({"symbol":s["symbol"],"inside":inside,"has_bars":bool(present),"unknown_active_sessions":len(unknown)})
             if unknown: missing_rows.append({"symbol":s["symbol"],"category":"unknown_active_reason",
                                             "ranges":_missing_ranges(active,unknown)})
-        covered = sum(len({r[0] for r in c.execute("SELECT trading_date FROM bars WHERE symbol=? AND trading_date BETWEEN ? AND ?",(s["symbol"],reference[0],reference[-1]))} & set(reference)) for s in inventory)
+        covered = sum(len({r[0] for r in c.execute("SELECT trading_date FROM accepted_bars WHERE symbol=? AND trading_date BETWEEN ? AND ?",(s["symbol"],reference[0],reference[-1]))} & set(reference)) for s in inventory)
     inside = sum(s["inside"] for s in stocks)
     recon = {"security_total":len(stocks),"inside":inside,"outside":len(stocks)-inside,
              "inside_with_bars":sum(s["inside"] and s["has_bars"] for s in stocks),
@@ -163,7 +174,7 @@ def gap_accounting(cache, reference):
         "date_accounting_reconciles":covered+sum(counts.values())==len(reference)*len(stocks),
         "coverage_reconciliation":recon,"lifecycle_conflicts":conflicts,"missing_ranges":missing_rows,
         "observed_outside_reference_calendar":unexpected,
-        "evidence_limitations":"No absent quote is treated as suspension. Confirmed suspension/true loss remain zero without independent event or raw-row evidence."}
+        "evidence_limitations":"No absent quote is treated as suspension. Only separately stored, independently corroborated full-session event evidence explains missing quotes; event coverage is not assumed complete."}
 
 
 def run_batch_report(run: Path, original_evidence: Path, reuse=False):
@@ -285,7 +296,7 @@ def run_final_snapshot_audit(snapshot: Path, source_review: Path, output: Path):
         "no_returns_computed":True,"admission_report":str((report_dir/"phase5a_admission_report.txt").resolve()),
         "blockers_file":str((report_dir/"blockers.json").resolve())}
     (output/"final_reaudit.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
-    lines=["Roviga Phase 4 第一批口径修复后预审计","验收区间：2015-06-01 至 2026-09-30",
+    lines=["Roviga Phase 4 口径修复后预审计","验收区间：2015-06-01 至 2026-09-30",
         "数据快照："+identity["id"],f"证券数：{stock_count}；缺上市日期：{missing_listing}",
         f"行情：{bar_dates[0]} 至 {bar_dates[1]}，区间记录 {bar_dates[2]}",
         "缺口分类："+json.dumps(gaps["missing_categories"],ensure_ascii=False),
@@ -347,6 +358,93 @@ def enrich_final_review(output: Path):
         f"{len(warmup)} 只已有存续股票中，{has_prior} 只有真实区间前行情。" \
         "北交所9只逐只来源/复权/成交范围状态见 admission/phase5a_admission_report.json。\n"
     text_path.write_text(text,encoding="utf-8")
+
+
+def batch2_comparison(output: Path, baseline_report: Path, source_review: Path):
+    """Reconcile immutable before/after reports; never infer progress across runs."""
+    before=json.loads(baseline_report.read_text(encoding='utf-8'))
+    after=json.loads((output/'final_reaudit.json').read_text(encoding='utf-8'))
+    run=output.parent;cache=SnapshotCache(Path(after['snapshot']['path']))
+    reference=sorted(d for d in json.loads(source_review.read_text(encoding='utf-8'))['calendar']['dates'] if '2015-06-01'<=d<='2026-09-30')
+    def expanded(report):
+        return {(s['symbol'],d) for s in report['gaps']['missing_ranges'] for r in s['ranges'] for d in reference if r['start']<=d<=r['end']}
+    original=expanded(before);remaining=expanded(after)
+    by_year=Counter();by_exchange=Counter();by_source=Counter();by_date=Counter();by_symbol=Counter();ranges=[]
+    from datetime import timedelta
+    with cache.connect() as c:
+        inventory={r['symbol']:dict(r) for r in c.execute('SELECT * FROM stocks')}
+        sources={r['symbol']:r['source'] for r in c.execute('SELECT symbol,source FROM symbol_sync_status')}
+        explained={(s,d) for s,days in load_session_explanations(c).items() for d in days} & original
+        filled={(r[0],r[1]) for r in c.execute('SELECT symbol,trading_date FROM targeted_fill_journal')} & original
+        physical=c.execute("SELECT COUNT(*) FROM bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+        accepted=c.execute("SELECT COUNT(*) FROM accepted_bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+        journals=c.execute('SELECT COUNT(*) FROM derived_limit_repair_journal').fetchone()[0]
+        for symbol,day in original:
+            by_year[day[:4]]+=1;by_exchange[inventory[symbol]['exchange']]+=1
+            by_source[sources.get(symbol) or 'unknown_latest_ledger']+=1;by_date[day]+=1;by_symbol[symbol]+=1
+        for item in before['gaps']['missing_ranges']:
+            symbol=item['symbol'];listing=inventory[symbol]['list_date']
+            start=max(date(2015,6,1),date.fromisoformat(listing)) if listing else date(2015,6,1)
+            boundaries=set()
+            while start<=date(2026,9,30):
+                boundaries.add(str(start));boundaries.add(str(start+timedelta(days=365)));start+=timedelta(days=366)
+            for r in item['ranges']:
+                ranges.append({'symbol':symbol,**r,'exchange':inventory[symbol]['exchange'],
+                    'latest_source_not_per_segment':sources.get(symbol),
+                    'nominal_366day_boundary_match':r['start'] in boundaries or r['end'] in boundaries,
+                    'boundary_evidence':'heuristic only; original segment request lineage absent, not a confirmed cause'})
+    removed=original-remaining
+    if explained & filled or removed != explained|filled or remaining-original:
+        raise ValueError('before/after gap categories are not disjoint and exhaustive')
+    old_quality={(r['symbol'],r['date']) for r in before['quality']['rows']}
+    new_quality={(r['symbol'],r['date']) for r in after['quality']['rows']}
+    warmup=after['baseline_field_review']['completion']['pre_window_previous_close']
+    jobs=[json.loads(p.read_text(encoding='utf-8')) for p in (run/'warmup_jobs').glob('*.json')]
+    unresolved_warmup=[]
+    with cache.connect() as c:
+        for j in jobs:
+            if not c.execute("SELECT 1 FROM accepted_bars WHERE symbol=? AND trading_date<'2015-06-01'",(j['symbol'],)).fetchone():
+                unresolved_warmup.append({'symbol':j['symbol'],'listing':j['listing_date'],
+                    'observed_raw_prior_date':j.get('raw_prior',[None])[0],
+                    'reason':'real raw history observed; numerical adjustment seam missing or conflicting',
+                    'next_step':'reconcile dated factor normalization and a second raw/adjusted overlap; never guess a scale',
+                    'source_job':str((run/'warmup_jobs'/(j['symbol']+'.json')).resolve())})
+    result={'acceptance_start':'2015-06-01','acceptance_end':'2026-09-30',
+        'before_snapshot':before['snapshot'],'after_snapshot':after['snapshot'],
+        'warmup':{'before_missing':2733,'after_missing':warmup['without_pre_window_bar'],'real_prior_added':warmup['with_real_pre_window_bar'],
+            'unresolved':unresolved_warmup,'benchmark_prior_closes_each':19,'factor_publication_not_certified':True},
+        'gap_reconciliation':{'original_unknown':len(original),'independently_explained_full_day_suspension':len(explained),
+            'real_quotes_filled':len(filled),'mapping_or_calendar_reclassified':0,'remaining_unknown':len(remaining),'reconciles':True,
+            'formula':f'{len(original)} = {len(explained)} + {len(filled)} + 0 + {len(remaining)}'},
+        'original_gap_aggregations':{'by_year':dict(by_year),'by_exchange':dict(by_exchange),'by_latest_stock_source':dict(by_source),
+            'by_symbol':dict(by_symbol),'top_dates':by_date.most_common(20),'continuous_ranges':ranges,
+            'nominal_segment_boundary_ranges':sum(r['nominal_366day_boundary_match'] for r in ranges)},
+        'quality':{'before_marks':before['quality']['all_applicable_check_mark_count'],'after_marks':after['quality']['all_applicable_check_mark_count'],
+            'before_distinct_rows':len(old_quality),'after_distinct_rows':len(new_quality),'removed_from_unresolved':len(old_quality-new_quality),
+            'newly_flagged_rows':len(new_quality-old_quality),'derived_limit_rows_repaired':journals,
+            'roots_before':before['quality']['primary_root_counts_disjoint_by_row'],'roots_after':after['quality']['primary_root_counts_disjoint_by_row'],
+            'resolved_keys':sorted(old_quality-new_quality),'new_keys':sorted(new_quality-old_quality)},
+        'same_snapshot_accounting':{'inventory_calendar_pairs':after['gaps']['calendar_cross_inventory'],
+            'categories':after['gaps']['missing_categories'],'observed_calendar_rows':after['gaps']['observed_calendar_stock_dates'],
+            'physical_rows_in_window':physical,'formal_view_rows_in_window':accepted,'isolated_preserved_rows':physical-accepted,
+            'duplicates':after['quality']['zero_or_unverified_categories']['same_stock_date_duplicates'],
+            'calendar_reconciles':after['gaps']['date_accounting_reconciles'],'security_reconciliation':after['gaps']['coverage_reconciliation']},
+        'bse_cases':after['bse_cases'],'weekends':json.loads((run/'event_reconciliation.json').read_text(encoding='utf-8'))['weekend_isolations'],
+        'gate_released':False,'formal_backtest_run':False,'live_database_modified':False}
+    (run/'batch2_comparison.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    text=['Roviga Phase 4 第二批修复对账（非收益回测）',
+        '固定验收区间：2015-06-01 至 2026-09-30；10月增量单独保留。',
+        '快照：'+after['snapshot']['id'],
+        f"缺预热证券：2733 → {warmup['without_pre_window_bar']}；真实补齐 {warmup['with_real_pre_window_bar']}。剩余名单、原因与来源见 JSON warmup.unresolved。",
+        '未知缺口对账：'+result['gap_reconciliation']['formula'],
+        f"质量标记：{result['quality']['before_marks']} → {result['quality']['after_marks']}；异常证券日期行：{len(old_quality)} → {len(new_quality)}。",
+        f'旧规则推导字段修正 {journals} 条；不改 OHLC、信号价格、成交量、成交额或 VWAP。',
+        f'原始区间行情 {physical} = 正式视图 {accepted} + 保留隔离 {physical-accepted}；重复 0。',
+        '8条周末记录及9只北交所逐项证据见 JSON；其余逐股逐日阻塞和处理方案见 final_reaudit/admission/blockers.json。',
+        '历史股票池、历史ST/参考价及复权发布时点仍未通过；不新增未启用模块门禁。',
+        '仅完成候选数据版本修复，不覆盖持续同步数据库。审计未通过，门禁保持关闭；本轮结束后暂停。']
+    (run/'batch2_comparison.txt').write_text('\n'.join(text),encoding='utf-8')
+    return result
 
 
 def main():

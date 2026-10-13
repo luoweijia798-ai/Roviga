@@ -1,6 +1,151 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-12
+Checkpoint date: 2026-10-13
+
+## Phase 4 data-semantics repair, batch 2 (2026-10-13)
+
+### Version, scope and safeguards
+
+- Actual starting HEAD was clean `d5483bce59be68cfdaa5cd74a17145dab656831e`;
+  no reset or overwrite of previous work. Formal acceptance remains
+  **2015-06-01..2026-09-30**. October incremental synchronization is separate.
+- All data writes were serialized on a new isolated candidate, not the live
+  synchronization database. The previous snapshot, checkpoints, source responses,
+  quarantine records and reports are retained. No synchronization process was
+  stopped. No selector/risk changes, parameter changes, return backtest or gate
+  release occurred; this batch pauses after repair and preaudit.
+- New immutable SQLite online-backup snapshot:
+  `sha256:43f4b0fa8c825f0e747ccf63862d726649a5d509a306ab7169ec17f4f3ba5906`,
+  revision **81903**, under ignored `outputs/phase4_batch2/20261013/final.sqlite`.
+  The live database was deliberately not replaced by this candidate.
+
+### Actual repairs and reconciled results
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Securities missing pre-window history | 2,733 | 940 |
+| Unexplained active stock-days | 253,264 | 221,550 |
+| All applicable quality marks | 68,819 | 61,665 |
+| Distinct unresolved stock-date rows | 68,783 | 61,630 |
+| Affected securities (quality) | 3,817 | 3,816 |
+| Non-session rows in formal data view | 8 | 0 |
+| Listing dates missing | 0 | 0 |
+
+- Added **1,793 real prior quotes**: 1,627 bounded Tencent/Sina-factor overlaps
+  passed initially; 166 more passed after checking the first existing quote
+  rather than assuming a stock traded in the first June week. Original jobs and
+  follow-up responses remain separately saved. The remaining 940 have observed
+  raw prior history but unresolved/unverified adjusted-price seams; none is
+  excused by inventing suspension, zero prices, future prices, or later starts.
+  Numerical seam agreement does **not** certify factor publication-time causality.
+- Actual baseline history dependency: selector momentum needs **one previous
+  actual quote**, not necessarily the preceding exchange session. No enabled
+  moving-average, breakout or volatility window was found. Existing market-regime
+  display uses **20 CSI300 closes including the current date**; 19 real pre-window
+  closes were added to each benchmark, with all five June overlap closes checked.
+  This display is not a selector/risk filter. Formal trading-date iteration is
+  bounded by snapshot metadata; earlier quotes remain readable for initialization,
+  not warmup orders, positions, trade counts or returns.
+- Independent Eastmoney suspension-event responses contained 4,043 records.
+  Only explicit full-session start/end bounds, absence of contradictory actual
+  bars, and corroborating positive-volume resumed quotes were accepted.
+  Forecast resume dates and intraday-only suspensions were not used as exemptions.
+  Event coverage is demonstrably partial, not assumed market-wide.
+  **253,264 = 31,710 evidenced full-day suspensions + 4 real quotes filled
+  + 0 mapping/calendar reclassifications + 221,550 unknown.**
+- The four filled quotes are 000415, 000711, 000796 and 002051 on 2026-09-29.
+  Their saved native KLC responses contain the real missing bars; raw/adjusted
+  overlaps on both sides match. No existing OHLC, signal price, volume, amount or
+  VWAP was changed. Newly inferred execution-limit metadata remains subject to
+  historical-reference validation, not silently certified.
+- Corrected **7,145 recognizable legacy-derived limit rows**, not source prices:
+  old fields exactly reproduced the former 5% calculation; consecutive-session
+  references, listing age and unchanged dated adjustment factor were required.
+  The [SZSE risk-warning rule](https://www.szse.cn/disclosure/notice/general/t20200710_579459.html)
+  and [2020-08-24 implementation notice](https://www.szse.cn/aboutus/trends/conference/t20200821_580925.html)
+  establish ChiNext's 20% rule. This is not a relaxed audit threshold. Before/after
+  fields and evidence are journaled. **82 remain unresolved**: 8 corporate-action
+  references, 58 resumed/reference-gap cases and 16 IPO/listing-age cases.
+  Official per-day execution references and historical eligibility remain gated.
+- Remaining disjoint quality root rows: current ST-name backcast **51,573**;
+  IPO/ex-right/reference uncertainty **6,983**; turnover/unit/price-mode/trade-scope
+  uncertainty **2,992**; remaining ChiNext special cases **82**. Root evidence,
+  raw-to-conversion-to-stored examples and source/year/error distributions are
+  retained in the local report. Source labels are latest stock-ledger labels,
+  **not** invented per-segment lineage.
+- All 8 weekend rows were replayed against native raw archives and independently
+  checked against the calendar. The bogus dates are absent from the raw date set
+  and exactly echo older real OHLCV/amount rows: 300462 2017-09-30→2017-04-20;
+  000415 2018-06-30→2018-01-16; 000711→2018-03-23; 000796→2018-01-18;
+  002051→2018-04-04; 002082→2017-12-15; 300238→2018-02-01;
+  300324 2018-09-30→2018-05-29. The six middle entries share 2018-06-30.
+  Originals remain in physical `bars`; only evidenced non-sessions are excluded
+  by the shared formal read view. No entire security is removed.
+- Same-snapshot reconciliation:
+  **16,285,599 - 4,101,050 - 452,183 - 31,710 - 221,550 = 11,479,106**
+  calendar/accepted rows. Physical in-window rows **11,479,114 = 11,479,106 + 8**
+  preserved isolated rows; duplicate stock-dates **0**. Inventory **5,907 = 5,820
+  in-window + 87 outside-window**, and all 5,820 have at least one real bar.
+  The 13 earlier unapproved quarantine cases remain separate from these counts.
+- Coverage/quality classification changes from 2,529 complete / 87 whole-window
+  exemptions / 3,291 missing-or-conflicting to **3,193 / 87 / 2,627**.
+  This classification is not causal or formal-backtest approval. CSI300 and
+  CSI1000 still each cover all **2,757 formal sessions**, besides warmup records.
+
+### BSE cases, environment and validation
+
+- 920396: unchanged exact half-tick comparison fixes the boundary false positive;
+  numeric raw/HFQ overlap passes, but factor publication and full trade-scope
+  provenance remain unapproved. It is not counted as an entirely qualified stock.
+- 920014, 920639, 920765, 920833, 920970: material HFQ normalization conflicts
+  remain; raw overlap alone cannot establish causal signal-price comparability.
+- 920371 (09-04), 920375 (09-11), 920701 (09-28): negotiated-trade evidence
+  supports incompatible OHLC versus aggregate-turnover scope. Comparable
+  regular-auction volume/amount is still needed. Diagnostic residual averages
+  were never written as VWAP or treated as execution prices. All nine remain.
+- Sina现场重放: unchanged Python 3.12.14 / AkShare 1.18.91 / MiniRacer 0.14.1
+  successfully loads the original native decoder in this permitted environment.
+  Three **exact saved, SHA-verified original responses** were replayed successfully,
+  plus eight targeted weekend archives. No alternative decoder or security-policy
+  change was used. DLL path/hash, versions, call chain and original WinError4551
+  messages are retained. The old full traceback was not retained and is explicitly
+  marked unavailable, not reconstructed as original evidence. This is not a claim
+  of validating every Sina response or every execution environment.
+- **Targeted tests: 22 passed. Full suite: 98 passed.** These are isolated unit
+  tests, not real-data returns.现场重放 results above are separately recorded;
+  unit passes do not stand in for source or causal certification.
+- Git diagnosis: the originally selected bundled Git 2.53.0.windows.3 lacks
+  its HTTPS helper. A complete official MinGit of that same version was separately
+  downloaded and verified against release SHA256
+  `0d7c85a26e45668b35d0d0aeb763289376cfc039e55e0938a617ed0dfa32e433`.
+  Its own executable/helper/DLL tree is used together, never mixed with the
+  incomplete distribution. HTTPS helper is in its `mingw64/bin` directory.
+  GitHub CLI keyring authentication and live REST ref queries work; Git smart-HTTP
+  attempts currently encounter connection resets, which are a separate network
+  problem, not evidence of invalid credentials. No password/token was printed.
+
+### Local deliverables and remaining work
+
+- Ignored local bundle: `outputs/phase4_batch2/20261013/`, including
+  `batch2_comparison.txt/.json`, `final_reaudit/final_reaudit.txt/.json`,
+  `final_reaudit/admission/phase5a_admission_report.txt/.json`, `blockers.json`,
+  `warmup_jobs/`, `warmup_overlap_evidence/`, `suspension_events.json`,
+  `event_reconciliation.json`, `limit_rule_repair.json`, `targeted_fill_result.json`,
+  `decoder_replay.json`, `source_semantics.json`, and nine per-security verdicts.
+  Reports/databases/cache/credentials are not Git artifacts.
+- Original gaps are grouped by security, continuous range, year, exchange,
+  latest stock source and nominal 366-day download boundaries. Boundary matches
+  are explicitly heuristic: original segment provenance is unavailable.
+  Largest original daily concentrations are 2015-07-09 (1,442), 07-10 (1,385),
+  07-08 (1,316), 07-13 (1,031), 07-14 (781); remaining dates are not automatically
+  called suspensions merely because the 2015 halt wave is plausible.
+- Next batch: remaining 940 adjustment seams; independently documented missing
+  sessions (especially historical halt clusters); historical ST/official reference
+  evidence for the dominant 51,573 rows; comparable BSE trade statistics and dated
+  adjustment normalization; point-in-time stock identities/universe. Unused
+  industry/concept/policy/rotation factors are not new admission gates.
+- **Fresh preaudit fails; formal backtest conditions are not met. Gate remains
+  closed. No automatic Phase 5A or return backtest follows this report.**
 
 ## Phase 4 data-semantics repair, batch 1 (2026-10-13)
 

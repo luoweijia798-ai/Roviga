@@ -91,6 +91,17 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
+def _install_accepted_view(connection: sqlite3.Connection) -> None:
+    """Keep raw rows immutable while excluding evidenced non-sessions from use."""
+    tables={r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'bars' not in tables:
+        return
+    predicate=(" WHERE NOT EXISTS (SELECT 1 FROM main.provider_quarantine q "
+        "WHERE q.symbol=b.symbol AND q.trading_date=b.trading_date "
+        "AND q.review_status='confirmed_non_session_excluded')") if 'provider_quarantine' in tables else ''
+    connection.execute('CREATE TEMP VIEW IF NOT EXISTS accepted_bars AS SELECT b.* FROM main.bars b'+predicate)
+
+
 class SQLiteMarketCache:
     """Portable disk cache sized for a decade of full-market daily bars."""
 
@@ -102,6 +113,7 @@ class SQLiteMarketCache:
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, factory=_ClosingConnection)
         connection.row_factory = sqlite3.Row
+        _install_accepted_view(connection)
         return connection
 
     def upsert_bars(self, bars: Iterable[HistoricalBar]) -> int:
@@ -481,7 +493,9 @@ class SQLiteHistoricalData:
     def trading_dates(self) -> tuple[date, ...]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT DISTINCT trading_date FROM bars ORDER BY trading_date"
+                "SELECT DISTINCT trading_date FROM accepted_bars "
+                "WHERE trading_date>=COALESCE((SELECT value FROM metadata WHERE key='formal_backtest_start'),'0001-01-01') "
+                "AND trading_date<=COALESCE((SELECT value FROM metadata WHERE key='formal_backtest_end'),'9999-12-31') ORDER BY trading_date"
             ).fetchall()
         return tuple(date.fromisoformat(row[0]) for row in rows)
 
@@ -499,6 +513,7 @@ class SQLiteHistoricalData:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, factory=_ClosingConnection)
         connection.row_factory = sqlite3.Row
+        _install_accepted_view(connection)
         return connection
 
 
@@ -520,7 +535,7 @@ class SQLiteHistoricalDataPortal:
         self._guard(trading_date)
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM bars WHERE trading_date=? ORDER BY symbol",
+                "SELECT * FROM accepted_bars WHERE trading_date=? ORDER BY symbol",
                 (trading_date.isoformat(),),
             ).fetchall()
         return tuple(_row_to_bar(row) for row in rows)
@@ -529,7 +544,7 @@ class SQLiteHistoricalDataPortal:
         self._guard(trading_date)
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM bars WHERE trading_date=? AND symbol=?",
+                "SELECT * FROM accepted_bars WHERE trading_date=? AND symbol=?",
                 (trading_date.isoformat(), symbol),
             ).fetchone()
         return _row_to_bar(row) if row else None
@@ -542,12 +557,12 @@ class SQLiteHistoricalDataPortal:
                 SELECT current.*,
                     (
                         SELECT COALESCE(previous.signal_close, previous.close)
-                        FROM bars AS previous
+                        FROM accepted_bars AS previous
                         WHERE previous.symbol=current.symbol
                           AND previous.trading_date < current.trading_date
                         ORDER BY previous.trading_date DESC LIMIT 1
                     ) AS previous_signal_close
-                FROM bars AS current
+                FROM accepted_bars AS current
                 WHERE current.trading_date=?
                 ORDER BY current.symbol
                 """,
@@ -573,7 +588,7 @@ class SQLiteHistoricalDataPortal:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT * FROM bars WHERE symbol=? AND trading_date<?
+                SELECT * FROM accepted_bars WHERE symbol=? AND trading_date<?
                 ORDER BY trading_date DESC LIMIT 1
                 """,
                 (symbol, before_date.isoformat()),
@@ -589,7 +604,7 @@ class SQLiteHistoricalDataPortal:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM bars WHERE symbol=? AND trading_date<=?
+                SELECT * FROM accepted_bars WHERE symbol=? AND trading_date<=?
                 ORDER BY trading_date DESC LIMIT ?
                 """,
                 (symbol, through_date.isoformat(), lookback),
@@ -654,6 +669,7 @@ class SQLiteHistoricalDataPortal:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, factory=_ClosingConnection)
         connection.row_factory = sqlite3.Row
+        _install_accepted_view(connection)
         return connection
 
     def _guard(self, requested_date: date) -> None:
