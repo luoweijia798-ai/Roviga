@@ -1,6 +1,155 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-13
+Checkpoint date: 2026-10-14
+
+## Phase 4 concentrated blocker repair, batch 3 (2026-10-14)
+
+### Scope and immutable version
+
+- Starting HEAD was clean `94d7b3102734cd40f1fa6100e0575f602d802716`.
+  No reset, strategy changes, parameter tuning, return backtest or gate release.
+  Acceptance remains **2015-06-01..2026-09-30**; October is separate.
+- All writes targeted an isolated candidate. The live sync process/database,
+  prior snapshots, checkpoints, raw responses and quarantine evidence were not
+  replaced or stopped. The candidate is **not** promoted to the live database.
+- Output snapshot: `sha256:ff1344cd625f0bbe0510c9d4b32487f30bafdb23016dcc2d675e0a18895b5335`,
+  revision **81904**. Ignored `outputs/phase4_batch3/20261014/final.sqlite` and
+  `audit_snapshot.sqlite` have the same byte hash. The latter was independently
+  read by the preaudit. Input remains batch 2 revision 81903, hash
+  `43f4b0fa8c825f0e747ccf63862d726649a5d509a306ab7169ec17f4f3ba5906`.
+
+### Actual changes, not blanket approval
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Existing securities missing pre-window history | 940 | 935 |
+| Unknown active stock-days | 221,550 | 188,697 |
+| Applicable quality marks | 61,665 | 47,318 |
+| Distinct unresolved quality stock-days | 61,630 | 47,285 |
+| Numerically ready but prior-quote continuity unverified | 216 | 213 |
+
+- Added five real prior quotes: **000498, 002735, 002747, 002749, 600146**.
+  Both raw OHLC and native HFQ overlap agree with the stored first signal row;
+  no arbitrary factor rescaling or warmup orders/positions/returns were used.
+- All **1,793** previously supplemented securities were rechecked, not simply
+  counted by row existence. Existing selector momentum needs one **previous
+  actual quote's positive signal close**, plus the current positive signal close;
+  it does not mean the immediately previous exchange session. There is no enabled
+  MA, breakout or volatility window. The current volume/tradable eligibility is
+  reported separately, unchanged. There are now 1,798 numerical-ready securities,
+  but 213 still have unexplained intervening sessions; none receives blanket
+  causal approval while factor publication/lineage remains unknown.
+- CSI300's existing regime display needs **20 valid closes including June 1**.
+  Its 19 prior closes exactly match May 5..29 exchange sessions. CSI1000 currently
+  needs the first formal comparison close; its additional 19 prior closes were
+  also verified, without introducing an unused-window gate. Risk state starts
+  empty at the formal start. Required fields remain documented by
+  `baseline_dependencies()` and the latest admission report.
+- Remaining 935: **933 native HFQ normalization conflicts**, plus **2 verified
+  code-change cases with recovered raw history but conflicting HFQ**. Issuer/
+  exchange evidence identifies 001872's former 000022 and 001914's former 000043;
+  eight bounded former-code queries succeeded. Their raw overlap agrees, but
+  source HFQ first closes 75.8474871 / 93.30425384 differ from stored 61.38 / 87.16.
+  They are not new listings or objectively short histories. No remaining case
+  was excused as proven suspension or objective insufficient history without proof.
+
+### Suspension coverage and reconciliation
+
+- Eastmoney's event query was fully paged: **9 pages / 4,304 rows**, with count
+  and uniqueness checks. It returned exactly one event per stock, not complete
+  historical daily suspension coverage. Empty, capped, permission/session and
+  network failures remain distinct; no interval exemption is inferred from two
+  empty price sources or from an intraday event.
+- Added a pinned public guest evidence client, BaoStock **0.9.1**, without
+  replacing AkShare as primary sync source. Official definitions specify daily
+  `tradestatus`, shares, yuan and ex-right reference `preclose`:
+  [K-line definitions](https://www.baostock.com/helpDocsHome?file=stockKData.md).
+  Bounded queries retain request scope, final-page state, errors, original
+  protocol responses and hashes. Only explicit daily suspended status with zero
+  turnover and no contradictory stored quote explains a missing date. Provider
+  carried-forward halt OHLC is **never** inserted as market bars.
+- **221,550 = 32,853 evidence-explained + 0 real formal quotes filled
+  + 0 mapping/calendar closures + 188,697 remaining original unknown**.
+  Formal calendar coverage and quality conflicts are independent counts.
+- **52 new source-status versus stored-quote conflicts** are separate blockers,
+  not part of the net reduction. One genuine positive-volume source quote,
+  000007 on 2026-09-29, remains unimported because its signal adjustment seam
+  has not passed. Remaining gaps are grouped by stock, continuous interval,
+  year, exchange and latest stock-source ledger. Original per-segment lineage
+  is absent; nominal segment boundaries are not asserted to be proven causes.
+- Full-market historical suspension coverage is still **unverified**. A guest
+  session expiry was diagnosed and recovered in a new bounded evidence run;
+  501 of 502 affected queries completed, one remained a recorded network failure.
+  Earlier failed responses are retained, never relabeled as no data. The SDK
+  adapter now reconnects expired sessions and stops after bounded failures.
+
+### Quality causes and the nine BSE securities
+
+- Three confirmed causes, with overlapping counts explicitly non-additive:
+  **14,183** rows disprove today's ST-name backcast using dated status;
+  **112** show previous actual close differs from the source's ex-right reference;
+  **13** have exact-share precision loss corroborated by native Sina and daily
+  BaoStock raw prices/turnover. Another 157 dated-reference derived-rule changes
+  have no independently isolated root attribution; they are not forced into a
+  confirmed causal category. Remaining audit root labels are hypotheses.
+- Changed derived limit/lock metadata and 13 corroborated volume values across
+  **14,374 distinct existing rows**. Existing raw OHLC, signal prices and amounts
+  were not rewritten. Twelve corrected one-price rows still have an actual
+  amount/share ratio outside OHLC and retain missing VWAP; only one exact ratio
+  became usable. No closing-price substitution, tolerance relaxation or removal
+  of quality checks. Preaudit removes **14,345** formerly abnormal date rows;
+  a corrected field is not automatically a fully resolved row/security.
+- Historical rule handling uses dated status/reference and existing effective
+  board-rule dates, excludes uncertain IPO/later main-board ST exceptions, and
+  leaves official per-date execution certification blocked where evidence lacks.
+- BSE **920396** retains its repaired half-tick boundary result, but not full
+  causal qualification. **920014, 920639, 920765, 920833, 920970** retain real
+  HFQ-source conflicts. **920371 (09-04), 920375 (09-11), 920701 (09-28)** retain
+  regular-auction versus negotiated-trade turnover-scope blockers. A separate
+  raw/HFQ query for each BSE security returned explicit `10004011` unsupported
+  `bj` identity, not no-data. No repeated identical requests or BSE exclusion.
+  Required next evidence is dated corporate actions/normalization and separately
+  defined regular-auction volume/amount; diagnostic residual averages remain
+  diagnostic only, never execution VWAP.
+
+### Replay, audit and delivery
+
+- Evidence manifest version `phase4-batch3-evidence-v1`, digest
+  `327059d3e8843a2019ded25fc01400b8cf5d7a7601509ad6068fb2e7d51bd177`:
+  **47,232 unique changes**; second application **0 writes**, unchanged revision.
+  Independent reconstruction from the verified same input and manifest matches
+  the entire logical bars/evidence/quarantine/metadata/journal content, digest
+  `a45f6b278b709c3dfed69e66aac07502647c58c65feda029114f2aff763b86bd`.
+  Atomic compare-and-set rejects changed source rows, changed evidence hashes,
+  duplicate targets, changed manifest contents under the same version and
+  post-sync mutations. It does not silently overwrite a newer source database.
+- Replay procedure reuses `build_batch3_patch`, `verify_snapshot`,
+  `freeze_database` and `apply_evidence_patch`: verify the immutable input first,
+  build a new isolated candidate, verify source hashes, apply once, repeat to
+  test no-op behavior, freeze and preaudit. For a different input, reassess
+  conflicts and create a new repair version; do not copy this candidate over live.
+- Same snapshot: **5,907 = 5,820 interval-inside + 87 interval-outside**.
+  **16,285,599 = 4,101,050 pre-list + 452,183 post-delist + 64,563 evidenced
+  suspension + 188,697 unknown + 11,479,106 observed calendar stock-days**.
+  Physical formal bars **11,479,114 = 11,479,106 accepted + 8 retained isolated
+  non-session rows**. No security was deleted or reclassified to force approval.
+- Local ignored deliverables: `batch3_comparison.json/.txt`,
+  `warmup_readiness_before.json`, `warmup_readiness_after.json`,
+  `suspension_evidence_coverage.json`, `repair_manifest.json`,
+  `replay_verification.json`, `bse_semantic_verdicts.json`, and
+  `final_reaudit/admission/phase5a_admission_report.txt` plus `blockers.json`.
+  These contain per-security dates, raw/source references, before/after values,
+  unresolved fields, attempts and required next sources; none is uploaded.
+- Validation: **50 targeted tests passed; 110 full-suite tests passed**.
+  These include explicitly isolated synthetic fixtures, not substitute real
+  history. Real-source collection, real-snapshot replay and preaudit are reported
+  independently. `pip check` passes. The prior approved Sina native-response
+  decoding evidence was reused; no new claim of platform-wide decoder equivalence.
+- **Formal admission remains blocked** by unresolved warmup/continuity, gaps,
+  quality conflicts, historical security identity/universe and factor publication
+  lineage. No unused industry/concept/policy module gate was introduced. Stop
+  after this batch; no automatic Phase5A, backtest or further retry loop.
+
 
 ## Phase 4 data-semantics repair, batch 2 (2026-10-13)
 

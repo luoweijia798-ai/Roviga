@@ -169,6 +169,12 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
                           last_error=status.get("last_error"), source_review=source_review if stock["exchange"] == "BSE" else
                           {k: v for k, v in source_review.items() if k != "raw_rows"})
             categories[category] += 1
+            if listing and listing < start and observed:
+                first_signal=min(observed)
+                previous=c.execute('SELECT trading_date,signal_close FROM accepted_bars WHERE symbol=? AND trading_date<? ORDER BY trading_date DESC LIMIT 1',(symbol,first_signal)).fetchone()
+                if previous is None or previous['signal_close'] is None or previous['signal_close']<=0:
+                    block(symbol,start,first_signal,'preexisting_security_warmup_not_ready',
+                          'Obtain real previous actual signal close with source-consistent adjustment; do not treat missing download as IPO exclusion')
             per_stock.append({"symbol": symbol, "exchange": stock["exchange"], "category": category,
                 "list_date": listing, "delist_date": delisting, "first": min(observed) if observed else None,
                 "last": max(observed) if observed else None, "row_count": len(observed),

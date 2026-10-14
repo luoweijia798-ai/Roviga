@@ -447,6 +447,185 @@ def batch2_comparison(output: Path, baseline_report: Path, source_review: Path):
     return result
 
 
+def warmup_readiness_review(cache, source_review: Path) -> dict:
+    """Separate numerical inputs, calendar continuity and causal certification.
+
+    No selector or backtest is executed; existing eligibility is described, not
+    changed. A single stored prior row is not blanket indicator approval.
+    """
+    import math
+    from .backtest import BacktestConfig
+    from .selector import SelectionConfig
+    config=BacktestConfig();selection=SelectionConfig()
+    full_calendar=sorted(json.loads(source_review.read_text(encoding='utf-8'))['calendar']['dates'])
+    rows=[];benchmarks={}
+    with cache.connect() as c:
+        explained=load_session_explanations(c)
+        stocks=c.execute("SELECT s.*,MIN(b.trading_date) first_signal FROM stocks s JOIN accepted_bars b ON b.symbol=s.symbol WHERE s.list_date<'2015-06-01' AND b.trading_date BETWEEN '2015-06-01' AND '2026-09-30' GROUP BY s.symbol ORDER BY s.symbol").fetchall()
+        for stock in stocks:
+            first=stock['first_signal'];symbol=stock['symbol']
+            current=c.execute('SELECT * FROM accepted_bars WHERE symbol=? AND trading_date=?',(symbol,first)).fetchone()
+            prior=c.execute('SELECT * FROM accepted_bars WHERE symbol=? AND trading_date<? ORDER BY trading_date DESC LIMIT 1',(symbol,first)).fetchone()
+            current_ok=current['signal_close'] is not None and math.isfinite(current['signal_close']) and current['signal_close']>0
+            prior_ok=prior is not None and prior['signal_close'] is not None and math.isfinite(prior['signal_close']) and prior['signal_close']>0
+            intervening=[d for d in full_calendar if (prior['trading_date'] if prior else '2015-05-29')<d<first]
+            unexplained=sorted(set(intervening)-explained.get(symbol,set()))
+            rows.append({'symbol':symbol,'first_signal_day':first,'previous_actual_quote':prior['trading_date'] if prior else None,
+                'required_prior_actual_quotes':1,'prior_positive_adjusted_close':bool(prior_ok),'current_positive_adjusted_close':bool(current_ok),
+                'numerical_momentum_inputs_ready':bool(prior_ok and current_ok),
+                'current_volume_and_tradable_eligible':bool(current['tradable'] and current['volume']>=selection.min_volume),
+                'intervening_calendar_sessions':len(intervening),'unexplained_intervening_dates':unexplained,
+                'latest_actual_quote_continuity_verified':not unexplained,
+                'adjustment_publication_causality_verified':False,'all_formal_requirements_ready':False})
+        needed=config.regime_lookback-1
+        expected=[d for d in full_calendar if d<'2015-06-01'][-needed:]
+        for name in ('CSI300','CSI1000'):
+            points=c.execute("SELECT trading_date,close FROM benchmarks WHERE name=? AND trading_date<='2015-06-01' ORDER BY trading_date DESC LIMIT ?",(name,config.regime_lookback)).fetchall()
+            actual=sorted(r['trading_date'] for r in points)
+            benchmarks[name]={'required_closes_including_signal_day':config.regime_lookback if name==config.regime_benchmark else 1,
+                'regime_indicator_enabled':name==config.regime_benchmark,'observed_closes':len(points),'dates':actual,
+                'previous_19_exact_calendar_match':actual==expected+['2015-06-01'],
+                'all_values_positive_finite':all(math.isfinite(r['close']) and r['close']>0 for r in points),
+                'sufficient_for_current_dependency':(actual==expected+['2015-06-01'] and all(math.isfinite(r['close']) and r['close']>0 for r in points)) if name==config.regime_benchmark else any(r['trading_date']=='2015-06-01' and math.isfinite(r['close']) and r['close']>0 for r in points)}
+    return {'dependencies':baseline_dependencies()['history_readiness'],'securities':rows,'benchmarks':benchmarks,
+        'existing_at_start':len(rows),'numerical_inputs_ready':sum(r['numerical_momentum_inputs_ready'] for r in rows),
+        'numerically_ready_but_continuity_unverified':sum(r['numerical_momentum_inputs_ready'] and not r['latest_actual_quote_continuity_verified'] for r in rows),
+        'fully_causal_ready':0,'notes':['No enabled MA/breakout/volatility or new module window.',
+            'New IPO without an actual previous bar remains excluded by existing portal/selector rules; missing old-stock downloads are explicit blockers.',
+            'Regime uses valid benchmark observations including today, with exact session continuity checked separately; no future observations.',
+            'Risk state starts empty at the formal start; no orders, positions or returns generated during warmup.']}
+
+
+def batch3_comparison(output: Path, baseline: Path, source_review: Path) -> dict:
+    """Extend the existing preaudit bundle, keeping newly found conflicts separate."""
+    run=output.parent
+    before=json.loads((baseline/'final_reaudit/final_reaudit.json').read_text(encoding='utf-8'))
+    after=json.loads((output/'final_reaudit.json').read_text(encoding='utf-8'))
+    repairs=json.loads((run/'evidence_classification.json').read_text(encoding='utf-8'))
+    alias_file=run/'alias_mapping_evidence.json'
+    aliases=json.loads(alias_file.read_text(encoding='utf-8')) if alias_file.exists() else {'proof':[]}
+    for proof in aliases['proof']:
+        for item in repairs['warmup_940']:
+            if item['symbol']==proof['symbol'] and proof.get('raw_overlap_pass') and not proof.get('signal_overlap_pass'):
+                item.update(category='verified_code_change_raw_history_recovered_adjustment_conflict',
+                            alias_evidence=proof,reason='Official issuer code-change evidence and former-code raw overlap pass; native HFQ still disagrees, not a new listing or objective short history.')
+    repairs['warmup_categories']=dict(Counter(x['category'] for x in repairs['warmup_940']))
+    reference=sorted(d for d in json.loads(source_review.read_text(encoding='utf-8'))['calendar']['dates'] if '2015-06-01'<=d<='2026-09-30')
+    def unknown(report):
+        return {(x['symbol'],d) for x in report['gaps']['missing_ranges'] if x['category']=='unknown_active_reason'
+                for span in x['ranges'] for d in reference if span['start']<=d<=span['end']}
+    original=unknown(before);remaining=unknown(after);removed=original-remaining
+    cache=SnapshotCache(Path(after['snapshot']['path']))
+    with cache.connect() as c:
+        explanations=load_session_explanations(c)
+        closed={key for key in removed if key[1] in explanations.get(key[0],set())}
+        filled={key for key in removed-closed if c.execute('SELECT 1 FROM accepted_bars WHERE symbol=? AND trading_date=?',key).fetchone()}
+        if removed!=closed|filled:raise ValueError('unexplained gap category movement')
+        stocks={r['symbol']:dict(r) for r in c.execute('SELECT * FROM stocks')}
+        latest_sources={r['symbol']:r['source'] for r in c.execute('SELECT symbol,source FROM symbol_sync_status')}
+        physical=c.execute("SELECT COUNT(*) FROM bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+        accepted=c.execute("SELECT COUNT(*) FROM accepted_bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+    readiness=warmup_readiness_review(cache,source_review)
+    (run/'warmup_readiness_after.json').write_text(json.dumps(readiness,ensure_ascii=False,indent=2),encoding='utf-8')
+    old_quality={(r['symbol'],r['date']) for r in before['quality']['rows']}
+    new_quality={(r['symbol'],r['date']) for r in after['quality']['rows']}
+    causes={};examples={}
+    for row in repairs['quality_repairs']:
+        for cause in row['causes']:
+            causes.setdefault(cause,set()).add((row['symbol'],row['date']))
+            examples.setdefault(cause,[])
+            if len(examples[cause])<3:examples[cause].append(row)
+    newly_conflicting=[r for r in repairs['suspension_reviews'] if r['status'] in {'conflicts_with_stored_quote','new_conflict_previously_explained'}]
+    quotes_waiting=[r for r in repairs['suspension_reviews'] if r['status']=='actual_source_quote_exists_signal_seam_not_yet_verified']
+    aggregations={name:Counter() for name in ('year','exchange','symbol','latest_stock_source_not_segment_provenance')}
+    for symbol,day in remaining:
+        aggregations['year'][day[:4]]+=1;aggregations['exchange'][stocks[symbol]['exchange']]+=1;aggregations['symbol'][symbol]+=1
+        aggregations['latest_stock_source_not_segment_provenance'][latest_sources.get(symbol) or 'unknown']+=1
+    # Exact query scope, including recovery attempts and failures; never equate
+    # a terminal API response with proof of full historical source coverage.
+    query_rows=[];query_counts=Counter();observed_year=Counter();observed_market=Counter();symbols=set()
+    for path in sorted((run/'baostock').glob('*.json')):
+        r=json.loads(path.read_text(encoding='utf-8'));query_counts[r['status']]+=1
+        query_rows.append({'path':str(path.resolve()),'request':r['request'],'status':r['status'],
+                           'returned':len(r['rows']),'protocol_pages':len(r.get('protocol_responses',[])),
+                           'error_code':r.get('error_code'),'error':r.get('error_message',r.get('exception'))})
+        if r['status']=='complete':
+            symbols.add(r['request']['code'])
+            for values in r['rows']:
+                item=dict(zip(r['fields'],values));observed_year[item['date'][:4]]+=1;observed_market[item['code'].split('.')[0]]+=1
+    evidence_coverage={'eastmoney':json.loads((run/'event_coverage.json').read_text(encoding='utf-8')),
+        'daily_source':{'queries':query_rows,'attempt_counts_including_recovered_errors':dict(query_counts),
+            'observed_securities':len(symbols),'observed_row_counts_by_year_including_overlap_queries':dict(observed_year),
+            'observed_row_counts_by_market':dict(observed_market),'single_page_cap':10000,
+            'semantics':'Explicit daily trading status, not interval inference from missing quotes; no copied halt OHLC inserted.',
+            'completeness':'Only listed bounded requests; terminal response, no full page, protocol retained. Empty/error never absence proof.',
+            'official_definition':'https://www.baostock.com/helpDocsHome?file=stockKData.md'},
+        'market_wide_suspension_history_complete':False}
+    (run/'suspension_evidence_coverage.json').write_text(json.dumps(evidence_coverage,ensure_ascii=False,indent=2),encoding='utf-8')
+    result={'acceptance_start':'2015-06-01','acceptance_end':'2026-09-30','before_snapshot':before['snapshot'],'after_snapshot':after['snapshot'],
+        'warmup':{'before_missing':940,'after_missing':after['baseline_field_review']['completion']['pre_window_previous_close']['without_pre_window_bar'],
+            'categories':repairs['warmup_categories'],'per_security':repairs['warmup_940'],
+            'readiness_review':str((run/'warmup_readiness_after.json').resolve()),
+            'existing_at_start':readiness['existing_at_start'],'numerical_ready':readiness['numerical_inputs_ready'],
+            'continuity_unverified':readiness['numerically_ready_but_continuity_unverified'],'benchmarks':readiness['benchmarks']},
+        'gap_reconciliation':{'original_unknown':len(original),'evidence_explained':len(closed),'real_quotes_filled':len(filled),
+            'mapping_calendar_closed':0,'remaining_original_unknown':len(original & remaining),'new_unknown':len(remaining-original),
+            'total_remaining_unknown':len(remaining),'new_source_conflicts_separately':len(newly_conflicting),
+            'formula':f'{len(original)} = {len(closed)} + {len(filled)} + 0 + {len(original & remaining)}'},
+        'remaining_gap_aggregations':{k:dict(v) for k,v in aggregations.items()},
+        'continuous_gap_ranges':after['gaps']['missing_ranges'],
+        'real_source_quotes_waiting_for_adjustment_validation':quotes_waiting,
+        'source_and_segment_lineage':'Latest stock source is not original per-segment provenance; original segment-boundary attribution remains unknown, not a confirmed cause.',
+        'quality':{'before_marks':before['quality']['all_applicable_check_mark_count'],'after_marks':after['quality']['all_applicable_check_mark_count'],
+            'before_rows':len(old_quality),'after_rows':len(new_quality),'resolved_rows':len(old_quality-new_quality),'newly_flagged_rows':len(new_quality-old_quality),
+            'confirmed_cause_counts_may_overlap':{k:len(v) for k,v in causes.items()},'reproducible_examples':examples,
+            'three_confirmed_roots':{k:len(causes.get(k,set())) for k in ('current_ST_name_backcast_disproved_by_dated_status','previous_actual_close_not_source_reference_price','corroborated_stored_share_precision_loss')},
+            'other_derived_rule_changes_root_not_independently_attributed':len(causes.get('stored_derived_rule_differs_from_dated_source_reference',set())),
+            'remaining_unverified_hypotheses_not_confirmed_causes':after['quality']['primary_root_counts_disjoint_by_row'],
+            'source_conflicts':newly_conflicting,'unresolved_field_reasons':repairs['quality_skip_rows']},
+        'same_snapshot_accounting':{'cross_inventory':after['gaps']['calendar_cross_inventory'],'categories':after['gaps']['missing_categories'],
+            'observed_calendar_rows':after['gaps']['observed_calendar_stock_dates'],'physical_formal_rows':physical,'accepted_rows':accepted,
+            'preserved_isolations':physical-accepted,'calendar_reconciles':after['gaps']['date_accounting_reconciles'],
+            'securities':after['gaps']['coverage_reconciliation']},
+        'bse_cases':after['bse_cases'],'replay':json.loads((run/'replay_verification.json').read_text(encoding='utf-8')),
+        'next_required_sources':['Original Eastmoney HFQ normalization and dated factor lineage for incompatible warmup overlaps; restore bounded endpoint access or separately authorize a compatible source.',
+            'Independent historical daily suspension coverage for the exact remaining ranges, including delisted/BSE identities; daily source explicitly rejects bj codes.',
+            'Official ex-right/reference, historical ST/IPO/resumption exceptions and source raw trade-scope evidence for remaining flagged dates.',
+            'Point-in-time security identity/universe and factor publication chronology remain unverified; no automatic defaults or exclusions.'],
+        'formal_backtest_ready':False,'gate_released':False,'no_returns_computed':True,'live_database_modified':False}
+    (run/'batch3_comparison.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    # Newly discovered contradictions must remain admission blockers even when
+    # old OHLC-only tests happen to pass.
+    admission=output/'admission';report=json.loads((admission/'phase5a_admission_report.json').read_text(encoding='utf-8'))
+    additions=[{'reason':'independent_daily_status_conflict','symbol':x['symbol'],'start':x['date'],'end':x['date'],
+                'detail':x['status'],'evidence':x['source'],'treatment_plan':'Compare exchange daily status and original positive-volume quote; do not overwrite either source.'} for x in newly_conflicting]
+    continuity=[{'reason':'previous_actual_quote_continuity_unverified','symbol':x['symbol'],
+                 'start':x['unexplained_intervening_dates'][0],'end':x['unexplained_intervening_dates'][-1],
+                 'dates':x['unexplained_intervening_dates'],'treatment_plan':'Verify daily suspension or real missing quotes between prior actual quote and first signal; numerical inputs alone do not certify continuity.'}
+                for x in readiness['securities'] if x['numerical_momentum_inputs_ready'] and x['unexplained_intervening_dates']]
+    report['batch3_review']={'comparison':str((run/'batch3_comparison.json').resolve()),'warmup_readiness':readiness,
+                             'new_source_conflict_blockers':additions,'formal_ready':False}
+    pending_quotes=[{'reason':'real_source_quote_adjustment_seam_unverified','symbol':x['symbol'],'start':x['date'],'end':x['date'],
+                    'evidence':x['source'],'treatment_plan':'Validate native raw and adjusted neighboring overlaps with stored signal scale before importing this real quote.'} for x in quotes_waiting]
+    report['blockers']=[x for x in report['blockers'] if x['reason'] not in {'independent_daily_status_conflict','previous_actual_quote_continuity_unverified','real_source_quote_adjustment_seam_unverified'}]+additions+continuity+pending_quotes
+    report['blocker_summary']=dict(Counter(x['reason'] for x in report['blockers']))
+    (admission/'phase5a_admission_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    (admission/'blockers.json').write_text(json.dumps(report['blockers'],ensure_ascii=False,indent=2),encoding='utf-8')
+    text=['Roviga Phase 4 第三批修复与预审计（非收益回测）','固定验收：2015-06-01 至 2026-09-30',
+        '快照：'+after['snapshot']['id'],f"缺预热证券：940 → {result['warmup']['after_missing']}；逐只结果见 batch3_comparison.json。",
+        '未知缺口对账：'+result['gap_reconciliation']['formula'],
+        f"质量标记：{result['quality']['before_marks']} → {result['quality']['after_marks']}；异常行：{len(old_quality)} → {len(new_quality)}。",
+        f'另发现 {len(newly_conflicting)} 个独立日状态与已有行情冲突，不混入净减少数。',
+        'CSI300 当前20收盘价依赖及CSI1000首日比较依赖已检查；股票复权时点因果性仍未通过。',
+        '重放与重复应用验证见 replay_verification.json。9只北交所、逐股日期与下一步来源见 JSON。',
+        '正式准入：不通过；门禁未解除；未运行收益回测；不覆盖持续同步库；本批完成后暂停。']
+    (run/'batch3_comparison.txt').write_text('\n'.join(text),encoding='utf-8')
+    report_text=admission/'phase5a_admission_report.txt'
+    base_text=report_text.read_text(encoding='utf-8').split('\n\n'+text[0],1)[0]
+    report_text.write_text(base_text+'\n\n'+'\n'.join(text),encoding='utf-8')
+    return result
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--run',type=Path);parser.add_argument('--evidence',type=Path)
     parser.add_argument('--reuse-accounting',action='store_true',help='reuse already generated immutable snapshot accounting')

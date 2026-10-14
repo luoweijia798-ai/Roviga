@@ -555,6 +555,316 @@ def apply_verified_events(snapshot: Path, run: Path, source_review: Path):
     return result
 
 
+def collect_baostock_evidence(run: Path, jobs: list[dict]) -> dict:
+    """Bounded public daily evidence; capture original protocol responses.
+
+    Empty, failed, capped and complete results remain distinct. Cached failures
+    are evidence, not invitations to endlessly repeat an identical request.
+    """
+    import hashlib
+    import socket
+    from datetime import datetime, timezone
+    import baostock as bs
+    import baostock.util.socketutil as transport
+    from unittest.mock import patch
+    folder=run/'baostock';folder.mkdir(parents=True,exist_ok=True)
+    fields='date,code,open,high,low,close,preclose,volume,amount,adjustflag,tradestatus,isST'
+    counts={};results=[];failures=0;old_timeout=socket.getdefaulttimeout();socket.setdefaulttimeout(12)
+    try:
+        login=bs.login()
+        if login.error_code!='0':raise RuntimeError('BaoStock guest login failed: '+login.error_msg)
+        send=transport.send_msg
+        for job in jobs:
+            request={'code':job['code'],'start':job['start'],'end':job['end'],'adjustflag':job.get('adjustflag','3'),'fields':fields}
+            key=hashlib.sha256(json.dumps(request,sort_keys=True).encode()).hexdigest()
+            saved=folder/(key+'.json')
+            if saved.exists():
+                result=json.loads(saved.read_text(encoding='utf-8'))
+                for raw in result.get('protocol_responses',[]):
+                    if hashlib.sha256(Path(raw['path']).read_bytes()).hexdigest()!=raw['sha256']:
+                        raise ValueError('cached source response hash mismatch')
+            else:
+                refs=[]
+                def capture(message):
+                    response=send(message)
+                    if response is not None:
+                        data=response.encode('utf-8');digest=hashlib.sha256(data).hexdigest();path=folder/(digest+'.response')
+                        if not path.exists():path.write_bytes(data)
+                        refs.append({'path':str(path.resolve()),'sha256':digest})
+                    return response
+                result={'request':request,'package_version':'0.9.1','fetched_at':datetime.now(timezone.utc).isoformat(),'rows':[], 'protocol_responses':refs}
+                try:
+                    time.sleep(.12)
+                    with patch.object(transport,'send_msg',capture):
+                        query=bs.query_history_k_data_plus(job['code'],fields,start_date=job['start'],end_date=job['end'],frequency='d',adjustflag=request['adjustflag'])
+                        while query.error_code=='0' and query.next():
+                            result['rows'].append(query.get_row_data())
+                            if len(result['rows'])>9999:raise ValueError('unexpected full-page result; explicit pagination review required')
+                    result.update(fields=query.fields,error_code=query.error_code,error_message=query.error_msg,final_page=query.cur_page_num)
+                    result['status']='complete' if query.error_code=='0' and result['rows'] else ('empty_not_absence_proof' if query.error_code=='0' else 'source_error')
+                    if result['status']=='complete' and (len(refs)!=1 or len(query.data)>=10000):
+                        result['status']='pagination_unverified'
+                except Exception as error:
+                    result.update(status='source_error',exception=f'{type(error).__name__}: {error}')
+                saved.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+            counts[result['status']]=counts.get(result['status'],0)+1
+            results.append({'job':job,'path':str(saved.resolve()),'status':result['status'],'rows':len(result['rows'])})
+            status={'processed':len(results),'total':len(jobs),'counts':counts}
+            (run/'evidence_collection_status.json').write_text(json.dumps(status),encoding='utf-8')
+            if len(results)%100==0:print(status,flush=True)
+            if result['status']=='source_error' and (not result.get('protocol_responses') or result.get('error_code')=='10001001'):
+                failures+=1
+                if failures>=3:break
+                # A timed-out stream is not reusable: reconnect once, never
+                # keep sending thousands of queries into a broken connection.
+                import baostock.common.context as context
+                connection=getattr(context,'default_socket',None)
+                if connection:connection.close()
+                if bs.login().error_code!='0':break
+            else:failures=0
+        bs.logout()
+    finally:socket.setdefaulttimeout(old_timeout)
+    summary={'queries':results,'counts':counts,'unattempted':jobs[len(results):], 'public_guest':True,'purchased_service':False,'max_page_rows':10000}
+    plan_id=hashlib.sha256(json.dumps(jobs,sort_keys=True).encode()).hexdigest()[:16]
+    (run/('baostock_collection_'+plan_id+'.json')).write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
+    return summary
+
+
+def verified_daily_limits(stored, source, listing_date):
+    """Numerical correction from dated status/reference, not today's ST name.
+
+    Unknown historical regimes and IPO/resumption exceptions are not waived.
+    Raw OHLC must agree before this evidence can change derived metadata.
+    """
+    from .real_market import _infer_limits, _same_price
+    from .tencent_bse import price_conflict
+    import math
+    day=stored['trading_date'];symbol=stored['symbol']
+    if source.get('adjustflag')!='3' or source.get('tradestatus')!='1' or source.get('isST') not in {'0','1'}:
+        return None,'missing_raw_trading_or_ST_evidence'
+    if symbol.startswith(('4','8','9')):return None,'BSE_historical_regime_unverified'
+    if not listing_date or (date.fromisoformat(day)-date.fromisoformat(listing_date)).days<30:
+        return None,'IPO_exception_requires_independent_rule_evidence'
+    if source['isST']=='1' and day>='2025-01-01' and not symbol.startswith(('300','301','688','689')):
+        return None,'later_mainboard_ST_regime_requires_dated_rule'
+    if any(price_conflict(source[k],stored[k]) for k in ('open','high','low','close')):
+        return None,'raw_price_conflict'
+    reference=float(source['preclose'])
+    if not math.isfinite(reference) or reference<=0:return None,'invalid_reference'
+    up,down=_infer_limits(symbol,'ST' if source['isST']=='1' else '',date.fromisoformat(day),reference)
+    if stored['close']>up+.005 or stored['close']<down-.005:
+        return None,'special_session_or_reference_still_conflicts'
+    return {'up_limit':up,'down_limit':down,
+            'limit_up_locked':int(_same_price(*(stored[k] for k in ('open','high','low','close')),up)),
+            'limit_down_locked':int(_same_price(*(stored[k] for k in ('open','high','low','close')),down))},'dated_status_and_source_reference'
+
+
+def corroborated_turnover_correction(stored, daily, native):
+    """Correct proven share precision loss; never replace VWAP by a price.
+
+    Two raw sources must agree on exact shares and on the stored OHLC. Amount
+    must agree with the stored amount in the daily source; a one-yuan native
+    reporting difference is evidence only, not permission to alter amount.
+    """
+    from decimal import Decimal
+    from .tencent_bse import price_conflict
+    if daily.get('adjustflag')!='3' or daily.get('tradestatus')!='1':return None
+    if any(price_conflict(stored[k],daily[k]) or price_conflict(stored[k],native[k]) for k in ('open','high','low','close')):return None
+    exact=Decimal(str(daily['volume']));other=Decimal(str(native['volume']))
+    if exact<=0 or exact!=other or exact!=exact.to_integral_value():return None
+    volume=int(exact)
+    if stored['volume']==volume or stored['volume']%100!=0 or abs(stored['volume']-volume)>=100:return None
+    amount=Decimal(str(daily['amount']))
+    if amount!=Decimal(str(stored['amount'])) or abs(amount-Decimal(str(native['amount'])))>1:return None
+    average=float(amount/exact)
+    return {'volume':volume,'vwap':average if stored['low']<=average<=stored['high'] else None}
+
+
+def build_batch3_patch(run: Path, baseline_run: Path):
+    """Produce evidence-backed candidate changes. Does not mutate the database."""
+    import hashlib
+    import math
+    from collections import Counter,defaultdict
+    from decimal import Decimal
+    from .phase4_acceptance import SnapshotCache
+    from .tencent_bse import price_conflict
+    baseline=json.loads((baseline_run/'final_reaudit/final_reaudit.json').read_text(encoding='utf-8'))
+    cache=SnapshotCache(Path(baseline['snapshot']['path']))
+    index={};conflicts=set();files={};source_counts=Counter()
+    for path in sorted(run.glob('official_*.md')):
+        files[str(path.resolve())]=hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in sorted((run/'baostock').glob('*.json')):
+        result=json.loads(path.read_text(encoding='utf-8'));source_counts[result['status']]+=1
+        if result['status']!='complete':continue
+        files[str(path.resolve())]=hashlib.sha256(path.read_bytes()).hexdigest()
+        for ref in result['protocol_responses']:files[ref['path']]=ref['sha256']
+        for values in result['rows']:
+            if len(values)!=len(result['fields']):raise ValueError('source field count differs')
+            row=dict(zip(result['fields'],values));key=(row['code'].split('.')[-1],row['date'],row['adjustflag'])
+            if key in index and index[key][0]!=row:conflicts.add(key)
+            else:index[key]=(row,str(path.resolve()))
+    for key in conflicts:index.pop(key,None)
+    changes={};quality=[];suspensions=[];warmup=[];skips=Counter();skip_rows=[]
+    def put(table,before,after,evidence):
+        key=(table,tuple(after[k] for k in REPAIR_KEYS[table]))
+        if key in changes:raise ValueError('multiple competing repairs; merge evidence explicitly')
+        changes[key]={'table':table,'before':before,'after':after,'evidence':evidence}
+    with cache.connect() as c:
+        stocks={r['symbol']:dict(r) for r in c.execute('SELECT * FROM stocks')}
+        old_explained={(r[0],r[1]):dict(r) for r in c.execute('SELECT * FROM session_evidence')}
+        calendar=[r[0] for r in c.execute("SELECT trading_date FROM benchmarks WHERE name='CSI300' AND trading_date BETWEEN '2015-06-01' AND '2026-09-30' ORDER BY trading_date")]
+        calendar_set=set(calendar)
+        for (symbol,day,mode),(source,path) in sorted(index.items()):
+            if mode!='3' or day not in calendar_set or symbol not in stocks:continue
+            stock=stocks[symbol]
+            if (stock['list_date'] and day<stock['list_date']) or (stock['delist_date'] and day>=stock['delist_date']):continue
+            observed=c.execute('SELECT 1 FROM accepted_bars WHERE symbol=? AND trading_date=?',(symbol,day)).fetchone()
+            if source.get('tradestatus')=='0' and Decimal(source.get('volume') or '0')==0 and Decimal(source.get('amount') or '0')==0:
+                if observed:
+                    suspensions.append({'symbol':symbol,'date':day,'status':'conflicts_with_stored_quote','source':path});continue
+                if (symbol,day) in old_explained:continue
+                evidence={'source':'BaoStock explicit daily tradestatus=0; not quote absence','source_file':path,'original_row':source,
+                          'semantics':'daily full-session status; provider carried prices deliberately not inserted as bars'}
+                after={'symbol':symbol,'trading_date':day,'status':'verified_full_day_suspension','evidence':json.dumps(evidence,sort_keys=True)}
+                put('session_evidence',None,after,evidence)
+                suspensions.append({'symbol':symbol,'date':day,'status':'independent_daily_suspension','source':path})
+            elif source.get('tradestatus')=='1' and float(source.get('volume') or 0)>0:
+                if (symbol,day) in old_explained:
+                    old=old_explained[symbol,day];new={**old,'status':'conflicting_independent_daily_status',
+                        'evidence':json.dumps({'prior_evidence':json.loads(old['evidence']),'new_daily_source':path,'raw':source},sort_keys=True)}
+                    put('session_evidence',old,new,{'new_problem':'event evidence contradicted by independent positive-volume daily quote'})
+                    suspensions.append({'symbol':symbol,'date':day,'status':'new_conflict_previously_explained','source':path})
+                elif not observed:suspensions.append({'symbol':symbol,'date':day,'status':'actual_source_quote_exists_signal_seam_not_yet_verified','source':path})
+        for flagged in baseline['quality']['rows']:
+            symbol,day=flagged['symbol'],flagged['date'];pair=index.get((symbol,day,'3'))
+            if not pair:continue
+            source,path=pair;old=dict(c.execute('SELECT * FROM bars WHERE symbol=? AND trading_date=?',(symbol,day)).fetchone())
+            try:fixed,reason=verified_daily_limits(old,source,stocks[symbol]['list_date'])
+            except (ValueError,KeyError):fixed,reason=None,'source_field_invalid'
+            if fixed and any(old[k]!=v for k,v in fixed.items()):
+                previous=c.execute('SELECT close,trading_date FROM accepted_bars WHERE symbol=? AND trading_date<? ORDER BY trading_date DESC LIMIT 1',(symbol,day)).fetchone()
+                causes=[]
+                if 'ST' in stocks[symbol]['name'].upper() and source['isST']=='0':causes.append('current_ST_name_backcast_disproved_by_dated_status')
+                if previous and price_conflict(previous['close'],source['preclose']):causes.append('previous_actual_close_not_source_reference_price')
+                if not causes:causes.append('stored_derived_rule_differs_from_dated_source_reference')
+                evidence={'source_file':path,'original_row':source,'previous_actual':dict(previous) if previous else None,
+                    'historical_rule':'date-specific existing rule; IPO/later-mainboard-ST exceptions not guessed',
+                    'confirmed_causes':causes,'official_daily_reference_certification':'not asserted; provider evidence retained'}
+                new={**old,**fixed};put('bars',old,new,evidence)
+                quality.append({'symbol':symbol,'date':day,'causes':causes,'source':path,'before':old,'after':new})
+            elif fixed is None:
+                skips[reason]+=1
+                skip_rows.append({'symbol':symbol,'date':day,'reason':reason,'source':path})
+        native_path=run/'native_turnover_corrections.json'
+        if native_path.exists():
+            files[str(native_path.resolve())]=hashlib.sha256(native_path.read_bytes()).hexdigest()
+            for item in json.loads(native_path.read_text(encoding='utf-8')):
+                symbol,day=item['symbol'],item['date'];pair=index.get((symbol,day,'3'))
+                if not pair:continue
+                old=dict(c.execute('SELECT * FROM bars WHERE symbol=? AND trading_date=?',(symbol,day)).fetchone())
+                fixed=corroborated_turnover_correction(old,pair[0],item['native'])
+                if fixed is None:continue
+                ref=item['reference'];files[ref['path']]=ref['sha256']
+                evidence={'confirmed_causes':['corroborated_stored_share_precision_loss'],
+                          'daily_source':pair[1],'native_reference':ref,'native_row':item['native'],
+                          'daily_row':pair[0],'conversion':'exact integer shares; amount unchanged; no estimated VWAP'}
+                key=('bars',(day,symbol))
+                if key in changes:
+                    changes[key]['after'].update(fixed)
+                    changes[key]['evidence']['turnover_correction']=evidence
+                else:put('bars',old,{**old,**fixed},evidence)
+                quality.append({'symbol':symbol,'date':day,'causes':evidence['confirmed_causes'],
+                                'source':pair[1],'before':old,'after':changes[key]['after']})
+        unresolved=json.loads((baseline_run/'batch2_comparison.json').read_text(encoding='utf-8'))['warmup']['unresolved']
+        for item in unresolved:
+            symbol=item['symbol'];first=dict(c.execute("SELECT * FROM bars WHERE symbol=? AND trading_date>='2015-06-01' ORDER BY trading_date LIMIT 1",(symbol,)).fetchone())
+            prior=item['observed_raw_prior_date'];raw=index.get((symbol,prior,'3'));adjusted=index.get((symbol,prior,'1'))
+            overlap_raw=index.get((symbol,first['trading_date'],'3'));overlap_adj=index.get((symbol,first['trading_date'],'1'))
+            review={'symbol':symbol,'listing':stocks[symbol]['list_date'],'prior_date':prior,'first_signal_date':first['trading_date'],
+                'category':'history_exists_source_adjustment_conflict','source_attempts':['saved Tencent raw/Sina factor seam','BaoStock raw/native HFQ'],
+                'remaining_fields':['source-consistent prior signal_close','factor publication/normalization lineage'],'formal_ready':False}
+            if not all((raw,adjusted,overlap_raw,overlap_adj)):
+                review['category']='source_cannot_cover_requested_identity_or_date';review['reason']='One or more explicit raw/HFQ prior/overlap rows absent; not proof of objective history shortage'
+            else:
+                review['sources']=[v[1] for v in (raw,adjusted,overlap_raw,overlap_adj)]
+                try:
+                    match=all(not price_conflict(overlap_raw[0][k],first[k]) and first['signal_'+k] is not None and not price_conflict(overlap_adj[0][k],first['signal_'+k]) for k in ('open','high','low','close'))
+                    if match and raw[0]['tradestatus']=='1' and adjusted[0]['tradestatus']=='1':
+                        source=raw[0];volume=int(source['volume']);amount=float(source['amount']);average=amount/volume if volume>0 else None
+                        prices={k:float(source[k]) for k in ('open','high','low','close')}
+                        if volume<=0 or amount<=0 or not all(math.isfinite(v) and v>0 for v in prices.values()):raise ValueError('invalid real quote')
+                        if not prices['low']<=min(prices['open'],prices['close'])<=max(prices['open'],prices['close'])<=prices['high']:raise ValueError('invalid OHLC')
+                        new={'trading_date':prior,'symbol':symbol,**prices,'volume':volume,'amount':amount,
+                            'vwap':average if prices['low']<=average<=prices['high'] else None,'tradable':1,'up_limit':None,'down_limit':None,'limit_up_locked':0,'limit_down_locked':0,
+                            **{'signal_'+k:float(adjusted[0][k]) for k in prices}}
+                        put('bars',None,new,{'warmup':review,'raw':source,'native_adjusted':adjusted[0],'overlap_stored':first,'not_for_warmup_trades':True})
+                        review['category']='real_prior_added_native_source_overlap_passed'
+                    else:review['reason']='Native source HFQ differs from stored signal scale; no arbitrary rescaling'
+                except (ValueError,KeyError,ZeroDivisionError) as error:review['reason']=str(error)
+            warmup.append(review)
+    manifest={'version':'phase4-batch3-evidence-v1','input_snapshot':baseline['snapshot']['id'],
+        'source_files':[{'path':k,'sha256':v} for k,v in sorted(files.items())],
+        'changes':[changes[k] for k in sorted(changes)]}
+    result={'source_result_counts':dict(source_counts),'source_conflict_keys':sorted(conflicts),
+        'quality_repairs':quality,'quality_skips':dict(skips),'quality_skip_rows':skip_rows,'suspension_reviews':suspensions,'warmup_940':warmup,
+        'warmup_categories':dict(Counter(x['category'] for x in warmup)),'repair_count':len(changes)}
+    (run/'repair_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
+    (run/'evidence_classification.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    return manifest,result
+
+
+REPAIR_KEYS={'bars':('trading_date','symbol'),'session_evidence':('symbol','trading_date'),
+             'provider_quarantine':('symbol','trading_date','source'),'metadata':('key',)}
+
+
+def apply_evidence_patch(cache, manifest: dict) -> dict:
+    """Existing candidate repair workflow: atomic, deterministic compare-and-set.
+
+    The manifest is data, never SQL. A stale source or mutated already-applied
+    row is a conflict, including when a journal entry exists. No silent overwrite.
+    """
+    import hashlib
+    canonical=json.dumps(manifest,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+    digest=hashlib.sha256(canonical.encode()).hexdigest()
+    changes=manifest['changes'];seen=set();applied=unchanged=0
+    for change in changes:
+        table=change['table']
+        if table not in REPAIR_KEYS:raise ValueError('unsupported repair target')
+        key=(table,tuple(change['after'][k] for k in REPAIR_KEYS[table]))
+        if key in seen:raise ValueError('duplicate manifest target')
+        seen.add(key)
+    for ref in manifest.get('source_files',[]):
+        if hashlib.sha256(Path(ref['path']).read_bytes()).hexdigest()!=ref['sha256']:
+            raise ValueError('repair evidence content changed')
+    with cache.connect() as c:
+        c.execute('PRAGMA busy_timeout=30000');c.execute('BEGIN IMMEDIATE')
+        c.execute('CREATE TABLE IF NOT EXISTS evidence_patch_runs(version TEXT PRIMARY KEY,manifest_sha256 TEXT,input_snapshot TEXT,change_count INTEGER)')
+        prior=c.execute('SELECT manifest_sha256 FROM evidence_patch_runs WHERE version=?',(manifest['version'],)).fetchone()
+        if prior and prior[0]!=digest:raise ValueError('same repair version has different content')
+        for change in changes:
+            table=change['table'];after=change['after'];before=change['before'];keys=REPAIR_KEYS[table]
+            columns={r[1] for r in c.execute(f'PRAGMA table_info({table})')}
+            if not set(after)<=columns or (before is not None and not set(before)<=columns):raise ValueError('unknown column')
+            where=' AND '.join(k+'=?' for k in keys);values=[after[k] for k in keys]
+            current=c.execute('SELECT * FROM '+table+' WHERE '+where,values).fetchone()
+            if current is not None and all(current[k]==v for k,v in after.items()):
+                unchanged+=1;continue
+            if prior:raise ValueError('already-applied data changed after repair')
+            if before is None:
+                if current is not None:raise ValueError('insert conflicts with existing source row')
+                cols=list(after)
+                c.execute('INSERT INTO '+table+' ('+','.join(cols)+') VALUES ('+','.join('?' for _ in cols)+')',[after[k] for k in cols])
+            else:
+                if current is None or not all(current[k]==v for k,v in before.items()):raise ValueError('source row differs from evidence baseline')
+                if any(before.get(k,after[k])!=after[k] for k in keys):raise ValueError('cannot change security/date identity')
+                c.execute('UPDATE '+table+' SET '+','.join(k+'=?' for k in after)+' WHERE '+where,list(after.values())+values)
+            applied+=1
+        if not prior:
+            c.execute('INSERT INTO evidence_patch_runs VALUES (?,?,?,?)',(manifest['version'],digest,manifest['input_snapshot'],len(changes)))
+        if applied:cache._invalidate_audit(c)
+    return {'version':manifest['version'],'manifest_sha256':digest,'applied':applied,'already_matches':unchanged,'unique_changes':len(changes)}
+
+
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)

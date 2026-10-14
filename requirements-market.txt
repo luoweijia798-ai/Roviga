@@ -4,5 +4,9 @@
 -c requirements-market-constraints.txt
 akshare>=1.18.91,<1.19
 
+# Verified public guest evidence API for historical daily ST/trading status.
+# Not a replacement for the AkShare primary sync source.
+baostock==0.9.1
+
 # Optional alternative provider; uncomment when a Tushare token is available.
 # tushare>=1.4
