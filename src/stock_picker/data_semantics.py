@@ -806,6 +806,12 @@ def batch5_comparison(output: Path, baseline: Path, source_review: Path) -> dict
         accepted=c.execute("SELECT COUNT(*) FROM accepted_bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
     q0={(r['symbol'],r['date']) for r in before['quality']['rows']}
     q1={(r['symbol'],r['date']) for r in after['quality']['rows']}
+    bse=read(run/'bse_semantic_verdicts.json')
+    for symbol,case in bse.items():
+        case['batch5_accounting']={'before_quality_dates':sorted(d for s,d in q0 if s==symbol),
+            'after_quality_dates':sorted(d for s,d in q1 if s==symbol),
+            'remaining_unknown_dates':sorted(d for s,d in g1 if s==symbol),'entire_security_qualified':False}
+    _write_status(run/'bse_semantic_verdicts.json',bse)
     current={r['symbol']:r for r in readiness['securities']}
     cohort={}
     for name in ('initial_919','separate_2'):
@@ -835,7 +841,7 @@ def batch5_comparison(output: Path, baseline: Path, source_review: Path) -> dict
             'calendar_cross_inventory':after['gaps']['calendar_cross_inventory'],'missing_categories':after['gaps']['missing_categories'],
             'observed_calendar_rows':after['gaps']['observed_calendar_stock_dates'],'reconciles':after['gaps']['date_accounting_reconciles'],
             'securities':after['gaps']['coverage_reconciliation']},
-        'bse_cases':read(run/'bse_semantic_verdicts.json'),
+        'bse_cases':bse,
         'source_conflicts':read(baseline/'batch4_comparison.json')['source_conflicts'],
         'announcement_600568':read(run/'announcement/review.json'),
         'isolation_verification':read(run/'isolation_verification.json'),
