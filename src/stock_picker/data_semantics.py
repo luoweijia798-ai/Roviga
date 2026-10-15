@@ -776,6 +776,115 @@ def batch4_comparison(output: Path, baseline: Path, source_review: Path) -> dict
     return result
 
 
+def batch5_comparison(output: Path, baseline: Path, source_review: Path) -> dict:
+    """Extend the same preaudit with exact queued work versus evidence blockers."""
+    from .sync_monitor import _write_status
+    run=output.parent
+    def read(path):return json.loads(path.read_text(encoding='utf-8'))
+    before=read(baseline/'final_reaudit/final_reaudit.json');after=read(output/'final_reaudit.json')
+    plan=read(run/'frozen_queue.json');status=read(run/'phase4_sync_status.json')
+    outcomes=[read(run/'warmup_results'/(t['symbol']+'.json')) for t in plan['tasks']]
+    cache=SnapshotCache(Path(after['snapshot']['path']))
+    readiness=warmup_readiness_review(cache,source_review)
+    _write_status(run/'warmup_readiness_after.json',readiness)
+    old=read(baseline/'warmup_readiness_after.json')
+    def groups(r):
+        return ({x['symbol'] for x in r['securities'] if not x['numerical_momentum_inputs_ready']},
+                {x['symbol'] for x in r['securities'] if x['numerical_momentum_inputs_ready'] and not x['latest_actual_quote_continuity_verified']})
+    m0,c0=groups(old);m1,c1=groups(readiness)
+    reference=sorted(d for d in read(source_review)['calendar']['dates'] if '2015-06-01'<=d<='2026-09-30')
+    def gaps(report):
+        return {(r['symbol'],d) for r in report['gaps']['missing_ranges'] if r['category']=='unknown_active_reason'
+                for span in r['ranges'] for d in reference if span['start']<=d<=span['end']}
+    g0,g1=gaps(before),gaps(after)
+    with cache.connect() as c:
+        explained=load_session_explanations(c)
+        closed={k for k in g0-g1 if k[1] in explained.get(k[0],set())}
+        filled={k for k in g0-g1-closed if c.execute('SELECT 1 FROM accepted_bars WHERE symbol=? AND trading_date=?',k).fetchone()}
+        if g0-g1!=closed|filled:raise ValueError('unexplained gap movement; do not invent calendar repair')
+        physical=c.execute("SELECT COUNT(*) FROM bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+        accepted=c.execute("SELECT COUNT(*) FROM accepted_bars WHERE trading_date BETWEEN '2015-06-01' AND '2026-09-30'").fetchone()[0]
+    q0={(r['symbol'],r['date']) for r in before['quality']['rows']}
+    q1={(r['symbol'],r['date']) for r in after['quality']['rows']}
+    current={r['symbol']:r for r in readiness['securities']}
+    cohort={}
+    for name in ('initial_919','separate_2'):
+        items=[r for r in outcomes if r['cohort']==name]
+        cohort[name]={**status['cohorts'][name], 'securities_with_new_requests':sum(bool(r['attempts']) for r in items),
+            'securities_without_new_requests':sum(not r['attempts'] for r in items),
+            'per_security':[{**r,'readiness':current.get(r['symbol'])} for r in items]}
+    continuity=[{'symbol':r['symbol'],'before':r,'after':current[r['symbol']],
+                 'query_execution':'access_execution_blocked; BaoStock guest login failed before history queries',
+                 'evidence_file':str((run/'daily_batch/baostock_login_failure.json').resolve())} for r in plan['continuity_75']]
+    result={'acceptance_start':'2015-06-01','acceptance_end':'2026-09-30',
+        'before_snapshot':before['snapshot'],'after_snapshot':after['snapshot'],
+        'execution_complete':status['all_queries_completed'],
+        'outcomes_recorded_not_equivalent_to_queries_completed':status['all_securities_have_outcomes'],
+        'cohorts':cohort,'continuity_75':continuity,
+        'warmup':{'before_missing':len(m0),'after_missing':len(m1),'before_continuity':len(c0),'after_continuity':len(c1),
+            'before_unique_not_ready':len(m0|c0),'after_unique_not_ready':len(m1|c1),
+            'intersection':sorted(m1&c1),'missing_to_continuity':sorted(m0&c1),
+            'new_not_ready':sorted((m1|c1)-(m0|c0)), 'became_numerically_and_continuity_ready':sorted((m0|c0)-(m1|c1)),
+            'causal_readiness_is_separate':True,'benchmarks':readiness['benchmarks']},
+        'gap_reconciliation':{'original_unknown':len(g0),'evidence_explained':len(closed),'real_quotes_filled':len(filled),
+            'mapping_calendar_closed':0,'remaining_original_unknown':len(g0&g1),'new_unknown':len(g1-g0),'total_remaining_unknown':len(g1)},
+        'quality':{'before_marks':before['quality']['all_applicable_check_mark_count'],'after_marks':after['quality']['all_applicable_check_mark_count'],
+            'before_rows':len(q0),'after_rows':len(q1),'resolved_original_rows':len(q0-q1),'new_rows':len(q1-q0),
+            'remaining_root_hypotheses_not_confirmed_causes':after['quality']['primary_root_counts_disjoint_by_row']},
+        'same_snapshot_accounting':{'physical_formal_rows':physical,'accepted_formal_rows':accepted,'preserved_isolations':physical-accepted,
+            'calendar_cross_inventory':after['gaps']['calendar_cross_inventory'],'missing_categories':after['gaps']['missing_categories'],
+            'observed_calendar_rows':after['gaps']['observed_calendar_stock_dates'],'reconciles':after['gaps']['date_accounting_reconciles'],
+            'securities':after['gaps']['coverage_reconciliation']},
+        'bse_cases':read(run/'bse_semantic_verdicts.json'),
+        'source_conflicts':read(baseline/'batch4_comparison.json')['source_conflicts'],
+        'announcement_600568':read(run/'announcement/review.json'),
+        'isolation_verification':read(run/'isolation_verification.json'),
+        'resume_command':status['resume_command'],'source_recovery_condition':status['source_circuit']['recovery_condition'] if status.get('source_circuit') else None,
+        'formal_backtest_ready':False,'gate_released':False,'no_returns_computed':True,'live_database_modified':False}
+    _write_status(run/'batch5_comparison.json',result)
+    demands=read(baseline/'data_requirements.json')
+    # The baseline demands remain provenance, not a claim that a new query ran.
+    for d in demands:
+        d['batch5_query_availability']='unverified; see exact queue outcome and login failure; not proof of unavailable data'
+        d['baseline_requirements_snapshot']=before['snapshot']['id']
+    _write_status(run/'data_requirements.json',demands)
+    _write_status(run/'unfinished_queries.json',{'securities':[r for r in outcomes if not r['query_complete']],
+        'daily_jobs':read(run/'daily_target_plan.json'),'daily_source_history_queries_issued':0,
+        'resume_command':status['resume_command']})
+    _write_status(run/'queried_but_evidence_blocked.json',{'warmup':[r for r in outcomes if r['query_complete'] and not r['qualified']],
+        'continuity':continuity,'inherited_data_blockers':str((run/'data_requirements.json').resolve())})
+    admission=output/'admission';report=read(admission/'phase5a_admission_report.json')
+    inherited=read(baseline/'final_reaudit/admission/phase5a_admission_report.json')['blockers']
+    reasons={'independent_daily_status_conflict','real_source_quote_adjustment_seam_unverified'}
+    report['blockers']=[x for x in report['blockers'] if x['reason'] not in reasons|{'previous_actual_quote_continuity_unverified'}]
+    report['blockers'] += [x for x in inherited if x['reason'] in reasons]
+    report['blockers'] += [{'reason':'previous_actual_quote_continuity_unverified','symbol':s,
+        'start':current[s]['unexplained_intervening_dates'][0],'end':current[s]['unexplained_intervening_dates'][-1],
+        'dates':current[s]['unexplained_intervening_dates'],'treatment_plan':'Obtain full-session evidence for each date; current guest login access is blocked.'} for s in sorted(c1)]
+    report['blocker_summary']=dict(Counter(x['reason'] for x in report['blockers']))
+    report['batch5_review']={'comparison':str((run/'batch5_comparison.json').resolve()),'execution_complete':result['execution_complete'],
+        'data_requirements':str((run/'data_requirements.json').resolve()),'warmup':result['warmup']}
+    report['formal_backtest_ready']=False;report['gate_released']=False
+    write_admission(admission,report)
+    primary=cohort['initial_919']
+    lines=['Roviga Phase 4 第五批：定向查询与预审计阶段结果（执行完成='+str(result['execution_complete'])+'）',
+        '验收区间：2015-06-01 至 2026-09-30；不覆盖持续同步库。','快照：'+after['snapshot']['id'],
+        f"初始919只：本轮请求{primary['securities_with_new_requests']}只，{primary['securities_without_new_requests']}只未发请求；查询完成{primary['query_complete']}只，数值新增{primary['numeric_inputs_added']}只；逐只结果见JSON。",
+        '另2只000033/000034：逐只结果见JSON；既有原始响应保留，缺失响应不能称为已证实价格冲突。',
+        f'预热缺行情 {len(m0)} → {len(m1)}；连续性不足 {len(c0)} → {len(c1)}；去重未就绪 {len(m0|c0)} → {len(m1|c1)}。',
+        f'未知缺口 {len(g0)} = 证据解释{len(closed)} + 实际补回{len(filled)} + 映射修复0 + 剩余原未知{len(g0&g1)}；新增未知{len(g1-g0)}。',
+        f"质量异常行 {len(q0)} → {len(q1)}；实际关闭{len(q0-q1)}，新增{len(q1-q0)}；标记 {result['quality']['before_marks']} → {result['quality']['after_marks']}。",
+        '75只连续性所需日状态查询受登录阻塞；9只北交所仍不整只合格。',
+        '600568：原公告证实11月24日复牌，但未取得交易取消原始通报，11月23日冲突仍阻塞。',
+        '断点和恢复命令：unfinished_queries.json；恢复前须有来源访问变化，不能无限重复失败请求。',
+        '未完成部分不承诺后台继续运行。正式准入不通过；门禁关闭；未运行收益回测。']
+    (run/'batch5_comparison.txt').write_text('\n'.join(lines),encoding='utf-8')
+    status.update(audit_triggered=True,audit_completed=True,audit_passed=False,formal_gate_released=False,
+                  audit_report=str((admission/'phase5a_admission_report.txt').resolve()))
+    _write_status(run/'phase4_sync_status.json',status)
+    return result
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--run',type=Path);parser.add_argument('--evidence',type=Path)
     parser.add_argument('--reuse-accounting',action='store_true',help='reuse already generated immutable snapshot accounting')

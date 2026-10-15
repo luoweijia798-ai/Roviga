@@ -2,6 +2,117 @@
 
 Checkpoint date: 2026-10-15
 
+## Phase 4 targeted warmup queue, batch 5 (2026-10-15, execution blocked)
+
+### Scope, actual execution and checkpoint
+
+- Starting HEAD was clean `98d610337feb76878e15f406e3e5b9623d53390f`.
+  A real remote query returned the same hash before this batch's commit.
+  No reset, strategy edits, parameter changes, full-market download or return
+  backtest occurred. Acceptance remains **2015-06-01..2026-09-30**; October is separate.
+- Frozen exact lists: **919** previously unqueried, **2** previously unresolved
+  (000033/000034), and **75** numerical-but-continuity-unverified. Every queue
+  entry retains required dates, raw/native-HFQ fields, three accepted formal
+  overlaps, prior evidence, attempted and unissued segments. Successful existing
+  responses are reused with their original body hashes.
+- **The 919-query task is NOT complete.** Only **000035** received new requests
+  in that cohort; **918** received none because the common source was blocked.
+  All 919 have explicit access/execution-blocked outcomes, **0** completed
+  queries, **0** newly added numerical inputs, **0** newly qualified securities.
+  A recorded blocker is not a completed query or proof that history is unavailable.
+- Both separate securities were actually requested. 000033's cached prior
+  raw/HFQ responses were reused; its 2017-05-24..26 formal overlaps still failed.
+  000034's 2015-03-20..2015-09-01 raw/HFQ requests failed. Their former generic
+  seam/coverage label does NOT establish a price mismatch: required responses
+  are absent owing to access failure.
+- Across 000033/000034/000035, **6 bounded mode queries / 12 failed attempts**
+  ended in `RemoteDisconnected`. The existing circuit stops after three
+  distinct securities; it does not issue another 918 identical-failure probes.
+  One separate installed-AKShare native-contract check also failed. Homepage
+  HTTP success does not mean the historical endpoint works.
+- BaoStock failed at public guest login (`网络接收错误` / timeout), before any
+  of **800** prepared targeted history queries. The 75 continuity cases retain
+  **795** unexplained intervening dates. Their evidence is still missing, not
+  proved suspension. The queue prioritizes these cases and then existing gap/
+  quality groups; already covered segments are excluded, not fully redownloaded.
+- Login failure now persists exact unissued scope and traceback. Queue status
+  categories are mutually exclusive by unique security. Resume preserves old
+  attempts, successful segments and CAS manifests. Refreshing a status file or
+  reclassifying a source-blocked stock does not advance success timestamps.
+  In this batch, last successful new market-data acquisition and candidate
+  write are both **null**. Last actual new-security attempt was
+  **2026-10-15 16:39:18 Asia/Shanghai**. No claim of ongoing background progress.
+
+### Fresh preaudit and real-data results
+
+| Measurement | Batch 4 | Batch 5 |
+| --- | ---: | ---: |
+| Missing numerical warmup history | 921 | 921 |
+| Numerical inputs present, continuity unverified | 75 | 75 |
+| Unique securities in these disjoint unresolved cohorts | 996 | 996 |
+| Unknown active stock-days | 120,256 | 120,256 |
+| Distinct anomalous stock-days | 27,039 | 27,039 |
+| Quality marks | 27,070 | 27,070 |
+| BSE special cases not wholly qualified | 9 | 9 |
+
+- **120,256 = 0 evidence closures + 0 real quotes filled + 0 mapping/calendar
+  closures + 120,256 original unknown**; newly discovered unknown gaps **0**.
+  Original abnormal rows resolved **0**, newly flagged rows **0**. No category
+  migration or data change is disguised as completion.
+- New isolated candidate at `outputs/phase4_batch5/20261015/final.sqlite` has
+  hash **`4f85d61157d9638c49791288bcbbc939c3497491909a76b21539a5cd5c262f4d`**,
+  revision **81907**: byte-identical to preserved batch 4 because no new source
+  values were safely imported. This is a fresh audit execution, NOT a claimed
+  repaired data version. The continuous-sync database was not overwritten.
+- Same-snapshot accounting: 5,907 securities = 5,820 inside + 87 outside;
+  16,285,599 calendar-stock cells = 4,101,050 pre-listing + 452,183 post-delisting
+  + 133,106 confirmed suspensions + 120,256 unknown + 11,479,004 accepted dates.
+  Physical formal rows **11,479,114 = 11,479,004 + 102 proven echoes + 8 non-sessions**.
+- Actual read-only consumer checks passed for all **110** exclusions, including
+  the requested additional **51** echoes: raw values/evidence retained; accepted
+  view, `bar`, daily signal snapshot, symbol history and previous-actual-bar
+  reads exclude them. No strategy or trade simulation was executed to test this.
+- 600568 / 2015-11-23 remains blocked. Issuer original announcement **2015-090**
+  from CNINFO, published 2015-11-24, was saved with hash and visually checked:
+  stock resumption is **2015-11-24**, agreement signing is **2015-11-23**, and
+  agreement effectiveness requires signing/seals. These are distinct semantics.
+  The original exchange auction-cancellation notice remains missing; issuer
+  resumption alone cannot prove the disputed 11-23 quote valid or invalid.
+- BSE: 920014/920639/920765/920833/920970 retain normalization/factor conflicts;
+  920396 retains the already repaired boundary false-positive but not complete
+  causal qualification; 920371/920375/920701 retain comparable auction-volume/
+  amount requirements. No unsupported BaoStock BSE requests or restricted
+  official-page workarounds were repeated. Per-security dated evidence and
+  earlier provider results remain in the admission bundle.
+- Existing dependencies unchanged: previous actual signal close (not assumed
+  previous exchange session), current signal close and continuity/causal evidence;
+  CSI300 display's 20 closes including 19 prior sessions and CSI1000 first
+  formal comparison close remain numerically sufficient. No new module gate.
+
+### Validation, delivery and recovery conditions
+
+- Targeted tests: **74 passed**. Full suite: **122 passed**, including five new
+  queue/login/empty-response/replay/progress regression tests. Fixtures are
+  synthetic unit tests only, not replacements for real market history.
+- Live checks are separate: Eastmoney historical access **failed**, BaoStock
+  guest login **failed**, issuer PDF **obtained**, 110 isolation-consumer checks
+  **passed**. Unit-test success is not a successful provider replay.
+- Ignored local delivery: `outputs/phase4_batch5/20261015/` contains frozen
+  queue, 921 per-security outcomes, separate unfinished-query and evidence-
+  blocker lists, source errors, original announcement, data requirements,
+  isolation checks, new preaudit/admission and before/after comparison.
+- `phase4_sync_status.json` and `unfinished_queries.json` contain the exact
+  resume command (`semantic_review --batch5 ... --recheck-source`). Reuse that
+  output directory only after a genuine access change and a successful bounded
+  representative request. Existing public sources need no purchase or new token.
+  If they remain inaccessible, an existing licensed local export with original
+  identifiers, field definitions and adjustment provenance can be evaluated;
+  its suitability is unknown until verified. No paid service is authorized.
+- **Formal admission remains denied; gate remains closed.** This is an honestly
+  incomplete, recoverable execution stage. Pause after reporting; no automatic
+  retry monitor or return backtest is started. Only code, tests and this document
+  are committed; database, reports, raw responses, caches and credentials excluded.
+
 ## Phase 4 source feasibility and targeted repair, batch 4 (2026-10-15)
 
 ### Protected scope and version

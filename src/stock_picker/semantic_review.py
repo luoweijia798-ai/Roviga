@@ -571,8 +571,21 @@ def collect_baostock_evidence(run: Path, jobs: list[dict]) -> dict:
     fields='date,code,open,high,low,close,preclose,volume,amount,adjustflag,tradestatus,isST'
     counts={};results=[];failures=0;old_timeout=socket.getdefaulttimeout();socket.setdefaulttimeout(12)
     try:
-        login=bs.login()
-        if login.error_code!='0':raise RuntimeError('BaoStock guest login failed: '+login.error_msg)
+        try:
+            login=bs.login()
+            if login.error_code!='0':raise RuntimeError('BaoStock guest login failed: '+login.error_msg)
+        except Exception as error:
+            import traceback
+            summary={'queries':[], 'counts':{}, 'unattempted':jobs, 'public_guest':True,
+                     'purchased_service':False, 'status':'access_execution_blocked',
+                     'stage':'guest_login', 'at':datetime.now(timezone.utc).isoformat(),
+                     'exception':f'{type(error).__name__}: {error}', 'traceback':traceback.format_exc(),
+                     'data_availability':'unknown; no history queries issued',
+                     'recovery_condition':'guest protocol access restored; do not infer from homepage HTTP availability'}
+            from .sync_monitor import _write_status
+            _write_status(run/'evidence_collection_status.json',summary)
+            _write_status(run/'baostock_login_failure.json',summary)
+            return summary
         send=transport.send_msg
         for job in jobs:
             request={'code':job['code'],'start':job['start'],'end':job['end'],'adjustflag':job.get('adjustflag','3'),'fields':fields}
@@ -832,7 +845,7 @@ def proven_capital_echo(stored, native_rows, capital_dates, daily):
             'not_majority_vote':'exact original adapter transformation plus explicit daily halt; absence alone is insufficient'}
 
 
-def collect_eastmoney_windows(run: Path, jobs: list[dict], *, existing_transport=False):
+def collect_eastmoney_windows(run: Path, jobs: list[dict], *, existing_transport=False, request_interval=.35):
     """Evidence-only bounded windows on the restored existing provider path."""
     import hashlib
     import requests
@@ -857,8 +870,9 @@ def collect_eastmoney_windows(run: Path, jobs: list[dict], *, existing_transport
         else:
             item={'request':job,'transport':cache_key['transport'],'provider':'Eastmoney direct; AkShare wrapper is not independent evidence','attempts':[]}
             for attempt in range(2):
+                refs=[]
                 try:
-                    time.sleep(.35 if attempt==0 else 2)
+                    time.sleep(max(.35,request_interval) if attempt==0 else max(2,request_interval))
                     with capture_responses(folder/'raw') as refs:
                         params={'secid':('1.' if job['symbol'].startswith('6') else '0.')+job['symbol'],
                                     'klt':'101','fqt':job['adjustflag'],'beg':job['start'].replace('-',''),
@@ -878,7 +892,7 @@ def collect_eastmoney_windows(run: Path, jobs: list[dict], *, existing_transport
                         item['status']='identity_window_or_completeness_conflict'
                     break
                 except Exception as error:
-                    item['attempts'].append({'error':f'{type(error).__name__}: {error}'})
+                    item['attempts'].append({'error':f'{type(error).__name__}: {error}', 'responses':refs})
                     item['status']='source_error'
                     if isinstance(error,requests.HTTPError) and error.response.status_code in (401,403,429):
                         item['status']='access_or_rate_limit';break
@@ -892,6 +906,187 @@ def collect_eastmoney_windows(run: Path, jobs: list[dict], *, existing_transport
     result={'queries':outcomes,'counts':dict(counts),'unattempted':jobs[len(outcomes):]}
     (run/('eastmoney_plan_'+hashlib.sha256(json.dumps(jobs,sort_keys=True).encode()).hexdigest()[:12]+'.json')).write_text(json.dumps(result,indent=2),encoding='utf-8')
     return result
+
+
+def prepare_batch5_queue(run: Path, baseline: Path, source_review: Path):
+    """Freeze the named cohorts and exact scope; reuse the existing snapshot tool."""
+    from .phase4_acceptance import freeze_database, verify_snapshot
+    from .sync_monitor import _write_status
+    run.mkdir(parents=True,exist_ok=True)
+    plan_path=run/'frozen_queue.json'
+    if plan_path.exists():return json.loads(plan_path.read_text(encoding='utf-8'))
+    identity=json.loads((baseline/'final_identity.json').read_text(encoding='utf-8'))
+    verify_snapshot(baseline/'final.sqlite',identity)
+    classification=json.loads((baseline/'evidence_classification.json').read_text(encoding='utf-8'))
+    readiness=json.loads((baseline/'warmup_readiness_after.json').read_text(encoding='utf-8'))
+    tasks=[];cache=SnapshotCache(baseline/'final.sqlite')
+    with cache.connect() as c:
+        for item in classification['warmup_935']:
+            if item['status'] not in {'not_yet_queried','source_seam_or_coverage_unresolved'}:continue
+            symbol=item['symbol'];prior=item['prior_date']
+            overlaps=[dict(r) for r in c.execute("SELECT * FROM accepted_bars WHERE symbol=? AND trading_date BETWEEN '2015-06-01' AND '2026-09-30' ORDER BY trading_date LIMIT 3",(symbol,))]
+            if len(overlaps)!=3:raise ValueError('frozen target requires three actual formal overlaps')
+            windows=[(prior,overlaps[-1]['trading_date'])] if (date.fromisoformat(overlaps[-1]['trading_date'])-date.fromisoformat(prior)).days<=366 else [(prior,prior),(overlaps[0]['trading_date'],overlaps[-1]['trading_date'])]
+            jobs=[{'symbol':symbol,'start':a,'end':b,'adjustflag':mode} for a,b in windows for mode in ('0','2')]
+            tasks.append({'symbol':symbol,'cohort':'initial_919' if item['status']=='not_yet_queried' else 'separate_2',
+                          'prior_date':prior,'overlaps':overlaps,'jobs':jobs,'previous_evidence':item['queries'],
+                          'previous_reason':item.get('reason'),'initial_status':item['status']})
+    if sum(x['cohort']=='initial_919' for x in tasks)!=919 or sum(x['cohort']=='separate_2' for x in tasks)!=2:
+        raise ValueError('actual input differs from named 919/2 cohorts; review before execution')
+    plan={'input_snapshot':identity,'baseline':str(baseline.resolve()),'source_review':str(source_review.resolve()),
+          'tasks':tasks,'continuity_75':[r for r in readiness['securities'] if r['numerical_momentum_inputs_ready'] and not r['latest_actual_quote_continuity_verified']],
+          'formal_start':'2015-06-01','formal_end':'2026-09-30','causal_approval_is_separate':True}
+    if len(plan['continuity_75'])!=75:raise ValueError('actual continuity cohort changed')
+    if not (run/'candidate.sqlite').exists():
+        frozen=freeze_database(baseline/'final.sqlite',run/'candidate.sqlite')
+        _write_status(run/'initial_snapshot_identity.json',frozen)
+    _write_status(plan_path,plan)
+    return plan
+
+
+def execute_batch5_warmup(run: Path, baseline: Path, source_review: Path, *, recheck_source=False):
+    """Complete the fixed queue or attach explicit shared-access blockers to it.
+
+    Per-security persistence, the existing bounded collector and CAS manifests
+    are reused. A blocked source is not queried thousands of times and its
+    unissued queries are never called unavailable data or completed downloads.
+    """
+    import hashlib
+    from datetime import datetime,timezone
+    from collections import Counter
+    from .real_market import SQLiteMarketCache
+    from .sync_monitor import _write_status, targeted_queue_status
+    plan=prepare_batch5_queue(run,baseline,source_review);cache=SQLiteMarketCache(run/'candidate.sqlite')
+    outcomes_dir=run/'warmup_results';outcomes_dir.mkdir(exist_ok=True)
+    manifests=run/'warmup_manifests';manifests.mkdir(exist_ok=True)
+    attempt_root=run/'warmup_requests'
+    if recheck_source:attempt_root=run/('warmup_requests_'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
+    circuit_path=run/'source_circuit.json'
+    circuit=json.loads(circuit_path.read_text(encoding='utf-8')) if circuit_path.exists() and not recheck_source else None
+    status_path=run/'phase4_sync_status.json'
+    prior_status=json.loads(status_path.read_text(encoding='utf-8')) if status_path.exists() else {}
+    events={k:prior_status.get(k) for k in ('last_data_success_at','last_candidate_write_at','last_new_security_at')}
+    outcomes={};index={};row_refs={};conflicts=set();saved_queries=[];consecutive_failed_symbols=[]
+    def now():return datetime.now(timezone.utc).isoformat()
+    def ingest(path):
+        item=json.loads(path.read_text(encoding='utf-8'));job=item['request']
+        saved_queries.append({'path':str(path.resolve()),'request':job,'status':item['status']})
+        if item['status']!='complete':return
+        for a in item['attempts']:
+            for ref in a.get('responses',[]):
+                if hashlib.sha256(Path(ref['file']).read_bytes()).hexdigest()!=ref['sha256']:raise ValueError('reused raw response hash differs')
+        for row in item['rows']:
+            key=(job['symbol'],row[0],job['adjustflag'])
+            if key in index and index[key]!=row:conflicts.add(key)
+            else:index[key]=row;row_refs[key]=str(path.resolve())
+        for key in conflicts:index.pop(key,None)
+    for folder in ('warmup_probe','warmup_batch','warmup_transport'):
+        for path in sorted((baseline/folder/'eastmoney').glob('*.json')):ingest(path)
+    for path in sorted(run.glob('warmup_requests*/eastmoney/*.json')):ingest(path)
+    for task in plan['tasks']:
+        path=outcomes_dir/(task['symbol']+'.json')
+        if path.exists():outcomes[task['symbol']]=json.loads(path.read_text(encoding='utf-8'))
+    def save(item,waiting=None):
+        outcomes[item['symbol']]=item
+        _write_status(outcomes_dir/(item['symbol']+'.json'),item)
+        payload=targeted_queue_status(plan['tasks'],outcomes,events,current=item['symbol'],waiting=waiting)
+        payload.update(source='Eastmoney',date_checkpoint=item.get('date_checkpoint'),source_circuit=circuit,
+                       candidate=str(cache.path.resolve()),resume_command=f'python -m stock_picker.semantic_review --batch5 --output "{run.resolve()}" --baseline "{baseline.resolve()}" --evidence "{source_review.resolve()}"',
+                       formal_gate_released=False,query_scope_file=str((run/'frozen_queue.json').resolve()))
+        _write_status(status_path,payload)
+    calendar=set(json.loads(source_review.read_text(encoding='utf-8'))['calendar']['dates'])
+    for task in plan['tasks']:
+        symbol=task['symbol'];previous=outcomes.get(symbol)
+        if previous and previous.get('query_complete'):
+            if previous.get('manifest'):apply_evidence_patch(cache,json.loads(Path(previous['manifest']).read_text(encoding='utf-8')))
+            continue
+        item={'symbol':symbol,'cohort':task['cohort'],'state':'not_started','required_jobs':task['jobs'],
+              'query_complete':False,'numeric_inputs_added':False,'qualified':False,'causal_price_verified':False,
+              'unissued_jobs':[],'attempts':list((previous or {}).get('attempts',[])),
+              'remaining_fields':['factor publication and original normalization lineage'],
+              'previous_evidence':task['previous_evidence']}
+        needed_dates=[task['prior_date']]+[r['trading_date'] for r in task['overlaps']]
+        def needed(job):return [d for d in needed_dates if job['start']<=d<=job['end']]
+        pending=[j for j in task['jobs'] if not all((symbol,d,j['adjustflag']) in index for d in needed(j))]
+        if (not previous and not pending) or (pending and not circuit):events['last_new_security_at']=now()
+        item['reused_required_rows']=sum((symbol,d,mode) in index for d in needed_dates for mode in ('0','2'))
+        item['state']='partial' if item['reused_required_rows'] else 'not_started'
+        save(item,'checking saved responses and exact remaining field/date scope')
+        success_count=0;failed=[]
+        for job in pending:
+            item['date_checkpoint']=job['start']+'..'+job['end']
+            if circuit:
+                item['unissued_jobs'].append(job);continue
+            item['state']='partial';save(item,'bounded source request in progress')
+            result=collect_eastmoney_windows(attempt_root,[job],existing_transport=True,request_interval=1.5)
+            response=result['queries'][0]
+            if response not in item['attempts']:item['attempts'].append(response)
+            ingest(Path(response['path']))
+            payload=json.loads(Path(response['path']).read_text(encoding='utf-8'))
+            if response['status']=='complete':
+                success_count+=1
+                times=[r['fetched_at'] for a in payload['attempts'] for r in a.get('responses',[]) if r.get('status')==200]
+                if times:events['last_data_success_at']=max([t for t in [events['last_data_success_at'],*times] if t])
+            elif response['status'] in {'source_error','access_or_rate_limit'}:failed.append(response)
+            if response['status']=='access_or_rate_limit':
+                circuit={'at':now(),'reason':'source denied access or rate-limited; no route rotation','evidence':[response],
+                         'recovery_condition':'access/rate limit resolved and explicit --recheck-source starts one new bounded attempt; preserve all old failures'}
+                _write_status(circuit_path,circuit)
+            save(item,'request result persisted; no full audit per stock')
+        available=all((symbol,d,mode) in index for d in needed_dates for mode in ('0','2'))
+        item['query_complete']=available or (not failed and not item['unissued_jobs'])
+        item['required_rows_present']=available
+        if available:
+            item['state']='awaiting_validation';save(item,'checking raw/adjusted overlap and original input requirements')
+            try:
+                if task['prior_date'] not in calendar:raise ValueError('prior date outside independently recorded calendar')
+                row=eastmoney_prior(symbol,task['prior_date'],task['overlaps'],index)
+                refs={};paths={row_refs[symbol,d,m] for d in needed_dates for m in ('0','2')}
+                for path in paths:
+                    refs[path]=hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                    payload=json.loads(Path(path).read_text(encoding='utf-8'))
+                    for a in payload['attempts']:
+                        for r in a.get('responses',[]):refs[r['file']]=r['sha256']
+                evidence={'task':task,'source_results':sorted(paths),'raw_prior':index[symbol,task['prior_date'],'0'],
+                          'native_hfq_prior':index[symbol,task['prior_date'],'2'],'causal_certified':False,
+                          'pre_window_orders_positions_returns':False}
+                manifest={'version':'phase4-batch5-warmup-'+symbol,'input_snapshot':plan['input_snapshot']['id'],
+                          'source_files':[{'path':k,'sha256':v} for k,v in sorted(refs.items())],
+                          'changes':[{'table':'bars','before':None,'after':row,'evidence':evidence}]}
+                path=manifests/(symbol+'.json')
+                if path.exists():
+                    old=json.loads(path.read_text(encoding='utf-8'))
+                    if old!=manifest:raise ValueError('existing manifest differs; preserve and investigate source change')
+                else:_write_status(path,manifest)
+                applied=apply_evidence_patch(cache,manifest)
+                item.update(numeric_inputs_added=True,manifest=str(path.resolve()),apply_result=applied,
+                            state='data_validation_blocked',reason='Numerical seam passed; continuity and point-in-time price evidence remain separate, not blanket warmup qualification')
+                if applied['applied']:events['last_candidate_write_at']=now()
+            except ValueError as error:item.update(state='data_validation_blocked',reason=str(error))
+        else:
+            access=bool(failed or circuit or item['unissued_jobs'])
+            item.update(state='access_execution_blocked' if access else 'data_validation_blocked',
+                        reason='Exact required responses missing due to access/execution block; NOT unavailable data' if access else 'Query returned but required identity/date/fields absent or conflicting; empty is not proof of no history',
+                        source_circuit=circuit,
+                        missing_required_keys=[list((symbol,d,m)) for d in needed_dates for m in ('0','2') if (symbol,d,m) not in index])
+        if failed and not success_count:
+            consecutive_failed_symbols.append({'symbol':symbol,'queries':failed})
+            if len(consecutive_failed_symbols)>=3 and circuit is None:
+                circuit={'at':now(),'reason':'All attempted modes failed on three consecutive distinct securities; source-wide transport circuit',
+                         'evidence':consecutive_failed_symbols[-3:],
+                         'recovery_condition':'A later bounded representative request succeeds after an actual network/access change; use --recheck-source, never call unissued jobs no-data'}
+                _write_status(circuit_path,circuit)
+        elif success_count:consecutive_failed_symbols=[]
+        item['reviewed_at']=now();save(item,item.get('reason'))
+        if len(outcomes)%25==0:print('warmup securities classified',len(outcomes),dict(Counter(v['state'] for v in outcomes.values())),flush=True)
+    final=targeted_queue_status(plan['tasks'],outcomes,events,current=None,waiting=circuit['reason'] if circuit else 'queue reviewed; full audit and remaining evidence work are separate')
+    last_attempt=next((outcomes[t['symbol']] for t in reversed(plan['tasks']) if outcomes[t['symbol']].get('attempts')),None)
+    final.update(source_circuit=circuit,candidate=str(cache.path.resolve()),formal_gate_released=False,
+                 source='Eastmoney',last_attempt_stock=last_attempt['symbol'] if last_attempt else None,
+                 date_checkpoint=last_attempt.get('date_checkpoint') if last_attempt else None,
+                 all_securities_have_outcomes=len(outcomes)==len(plan['tasks']),all_queries_completed=all(v.get('query_complete') for v in outcomes.values()),
+                 resume_command=f'python -m stock_picker.semantic_review --batch5 --output "{run.resolve()}" --baseline "{baseline.resolve()}" --evidence "{source_review.resolve()}" --recheck-source')
+    _write_status(status_path,final);return final
 
 
 def collect_capital_echo_evidence(run: Path, baseline: Path, conflicts=None):
@@ -1156,9 +1351,17 @@ def apply_evidence_patch(cache, manifest: dict) -> dict:
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--warmup-snapshot',type=Path,required=True)
+    parser.add_argument('--warmup-snapshot',type=Path)
+    parser.add_argument('--batch5',action='store_true')
+    parser.add_argument('--baseline',type=Path)
+    parser.add_argument('--evidence',type=Path)
+    parser.add_argument('--recheck-source',action='store_true')
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--apply-evidence',type=Path,help='independent source-review/calendar JSON')
     args=parser.parse_args()
-    if args.apply_evidence:apply_verified_events(args.warmup_snapshot,args.output,args.apply_evidence)
+    if args.batch5:
+        if not args.baseline or not args.evidence:parser.error('--batch5 requires --baseline and --evidence')
+        print(json.dumps(execute_batch5_warmup(args.output,args.baseline,args.evidence,recheck_source=args.recheck_source),ensure_ascii=False),flush=True)
+    elif not args.warmup_snapshot:parser.error('--warmup-snapshot required outside batch5')
+    elif args.apply_evidence:apply_verified_events(args.warmup_snapshot,args.output,args.apply_evidence)
     else:print(json.dumps(warmup_batch(args.warmup_snapshot,args.output),ensure_ascii=False),flush=True)

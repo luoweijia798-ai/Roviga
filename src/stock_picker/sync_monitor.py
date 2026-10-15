@@ -116,6 +116,30 @@ class Phase4SyncMonitor:
         return payload, audit
 
 
+def targeted_queue_status(tasks, outcomes, events, *, current=None, waiting=None):
+    """Same status writer, explicit unique-security repair progress (not liveness).
+
+    Successful response/write timestamps are supplied by the actions themselves;
+    refreshing this report must never advance them.
+    """
+    states=('not_started','partial','awaiting_validation','qualified','data_validation_blocked','access_execution_blocked')
+    cohorts={}
+    for cohort in sorted({t['cohort'] for t in tasks}):
+        symbols={t['symbol'] for t in tasks if t['cohort']==cohort};counts={k:0 for k in states}
+        for symbol in symbols:
+            state=outcomes.get(symbol,{}).get('state','not_started')
+            if state not in counts:raise ValueError('unknown targeted state')
+            if state=='qualified' and not outcomes[symbol].get('causal_price_verified'):
+                raise ValueError('numeric availability is not causal qualification')
+            counts[state]+=1
+        cohorts[cohort]={'total_unique_securities':len(symbols),'states':counts,'reconciles':sum(counts.values())==len(symbols),
+                         'query_complete':sum(bool(outcomes.get(s,{}).get('query_complete')) for s in symbols),
+                         'numeric_inputs_added':sum(bool(outcomes.get(s,{}).get('numeric_inputs_added')) for s in symbols)}
+    return {'schema_version':2,'kind':'phase4_targeted_repair','generated_at':datetime.now(timezone.utc).isoformat(),
+            'cohorts':cohorts,**events,'current_stock':current,'waiting_reason':waiting,
+            'process_exists_is_not_progress':True,'audit_triggered':False}
+
+
 def _write_status(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
