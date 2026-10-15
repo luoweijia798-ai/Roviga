@@ -208,7 +208,7 @@ def admission_report(cache: SnapshotCache, audit: dict, snapshot: dict,
         block(r["symbol"], r["first_bar"], r["last_bar"], "listing_metadata_conflict",
               "Verify exchange events and retain original rows in quarantine, not delete stock", evidence=r)
     for r in quarantines:
-        if r["review_status"] not in {"approved","confirmed_non_session_excluded"}:
+        if r["review_status"] not in {"approved","confirmed_non_session_excluded","confirmed_suspension_echo_excluded"}:
             block(r["symbol"], r["trading_date"], r["trading_date"], "quarantine_not_formally_approved",
                   "Review saved original weekend echo and official final-session evidence; do not silently approve", evidence=json.loads(r["evidence"]))
     # Current inventory + retained delists is not proof of a point-in-time universe.

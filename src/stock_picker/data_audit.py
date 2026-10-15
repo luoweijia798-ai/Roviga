@@ -171,7 +171,7 @@ class RealMarketDataAuditor:
                 "ORDER BY b.trading_date,b.symbol", interval).fetchall()
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             session_explanations = load_session_explanations(connection)
-            quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status NOT IN ('approved','confirmed_non_session_excluded')").fetchall() if "provider_quarantine" in tables else []
+            quarantine_rows = connection.execute("SELECT * FROM provider_quarantine WHERE review_status NOT IN ('approved','confirmed_non_session_excluded','confirmed_suspension_echo_excluded')").fetchall() if "provider_quarantine" in tables else []
 
         reference_dates = tuple(row["trading_date"] for row in reference_rows)
         bars_by_symbol = {row["symbol"]: row for row in bar_coverage}

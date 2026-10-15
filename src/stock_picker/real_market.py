@@ -92,13 +92,13 @@ class _ClosingConnection(sqlite3.Connection):
 
 
 def _install_accepted_view(connection: sqlite3.Connection) -> None:
-    """Keep raw rows immutable while excluding evidenced non-sessions from use."""
+    """Keep raw rows immutable; exclude proved non-sessions and adapter echoes."""
     tables={r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'bars' not in tables:
         return
     predicate=(" WHERE NOT EXISTS (SELECT 1 FROM main.provider_quarantine q "
         "WHERE q.symbol=b.symbol AND q.trading_date=b.trading_date "
-        "AND q.review_status='confirmed_non_session_excluded')") if 'provider_quarantine' in tables else ''
+        "AND q.review_status IN ('confirmed_non_session_excluded','confirmed_suspension_echo_excluded'))") if 'provider_quarantine' in tables else ''
     connection.execute('CREATE TEMP VIEW IF NOT EXISTS accepted_bars AS SELECT b.* FROM main.bars b'+predicate)
 
 

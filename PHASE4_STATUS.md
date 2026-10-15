@@ -1,6 +1,175 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-14
+Checkpoint date: 2026-10-15
+
+## Phase 4 source feasibility and targeted repair, batch 4 (2026-10-15)
+
+### Protected scope and version
+
+- Actual starting HEAD was clean `3f48ba1690ac47aa586009c578d8115e98008f9b`;
+  a live remote query also returned that hash before this batch's commit.
+  No reset, live-database replacement, duplicate full-market sync, strategy
+  edits, parameter changes, return backtest or gate release occurred.
+- Formal acceptance stays **2015-06-01..2026-09-30**. Warmup is earlier real
+  history; October updates remain separate. `selector.py` and `risk.py` unchanged.
+- Input is batch 3 snapshot `ff1344cd625f0bbe0510c9d4b32487f30bafdb23016dcc2d675e0a18895b5335`.
+  New isolated snapshot is **`4f85d61157d9638c49791288bcbbc939c3497491909a76b21539a5cd5c262f4d`**,
+  revision **81907**, at ignored `outputs/phase4_batch4/20261015/final.sqlite`.
+  Prior snapshots, original responses, quarantine records and live checkpoints
+  are preserved. This candidate has NOT been promoted to the continuous-sync DB.
+
+### Reconciled outcomes
+
+| Measurement | Batch 3 | Batch 4 |
+| --- | ---: | ---: |
+| Securities missing numerical pre-window inputs | 935 | 921 |
+| Numerical inputs present, prior-quote continuity unverified | 213 | 75 |
+| Unique securities in those two unresolved cohorts | 1,148 | 996 |
+| Unknown active stock-days | 188,697 | 120,256 |
+| Applicable quality marks | 47,318 | 27,070 |
+| Distinct anomalous stock-days | 47,285 | 27,039 |
+| Unresolved original 52 source conflicts | 52 | 1 |
+| BSE special-case securities not wholly qualified | 9 | 9 |
+
+- The original **935 and 213 sets are disjoint**. Of the original 213, **142**
+  now have complete intervening-day evidence and **71** still do not. Of 14 new
+  numerical warmups, 10 have continuity evidence and 4 do not, hence **75 = 71+4**.
+  None receives blanket causal-factor approval. Cohort lists retain every stock
+  and every unexplained intervening date.
+- Added real prior observations for **000009, 000010, 000011, 000016, 000017,
+  000018, 000019, 000020, 000021, 000023, 000025, 000029, 001872, 001914**.
+  All three first actual formal raw/HFQ OHLC overlaps must match unchanged
+  half-tick rules. No rescaling, forward-filled quote, estimated VWAP or warmup
+  order/position/return is generated. The verified former codes 000022/000043
+  remain the same securities, not new listings.
+- Existing dependencies are unchanged: previous **actual** positive signal
+  close plus current close; no enabled MA/breakout/volatility requirement.
+  CSI300's 20-close display window, including 19 exact prior sessions, and
+  CSI1000's first formal comparison close remain sufficient numerically.
+- **188,697 = 68,441 independently explained + 0 formal quotes filled
+  + 0 mapping/calendar closures + 120,256 remaining original unknown**.
+  No new unknown gap is hidden in the net reduction. There are **75,037** new
+  daily suspension evidence rows: 68,441 formal gaps and 6,596 pre-window days.
+
+### Proven common causes, with original evidence retained
+
+- The old Sina/AKShare capital-data outer join followed by forward-fill created
+  false quotes on capital dates. A record is excluded only when explicit daily
+  halt/zero-turnover evidence, no native KLC quote on that date, an exact match
+  to the last actual KLC OHLC/volume/amount, and the capital-date response all
+  agree. Absence or provider majority alone is insufficient.
+- **51 of the original 52** conflicts have that proof. A further **51 newly
+  discovered conflicts** were separately captured and all 51 proved to have the
+  same cause. All **102** original rows remain physically stored; only the
+  accepted view excludes them and records verified full-day suspension evidence.
+  They were NOT originally in the 188,697-gap set, so are not counted as closing
+  those gaps. Original 52 also intersected zero original quality dates; their
+  51 distinct securities intersected 50 missing-warmup and one continuity case.
+- **600568 / 2015-11-23** remains blocked. Native Sina contains 26.38 / 265,500
+  shares / 7,003,890 yuan while daily status says halted. A contemporaneous
+  report describes invalidated opening-auction trades, but the original exchange
+  cancellation/issuer notice has not been obtained. This is a concrete evidence
+  lead, not permission to delete the row or decide by counting interfaces.
+- Corrected **20,256 derived limit/lock rows**, with raw OHLC, adjusted prices,
+  volume, amount and VWAP unchanged. Dated status disproves today's ST-name
+  backcast on **19,367** rows; previous actual close differs from source ex-right
+  reference on **169** rows. These causal sets overlap. Another **822** changes
+  have a verified dated-reference discrepancy without an independently isolated
+  root cause. Remaining audit root labels are hypotheses, not per-row proof.
+- **20,246** original anomalous dates clear all current checks; zero newly
+  flagged dates. Ten repaired dates retain another issue. Remaining marks are
+  3,026 missing comparable VWAP, 9,668 closes above derived limits and 14,376
+  below; **27,039** distinct dates across **3,782** securities. This differs from
+  legacy first-reason blocker counts; neither counter substitutes for the other.
+
+### Source feasibility and remaining needs
+
+- Representative BaoStock daily queries covered early history, retired 000024,
+  long suspension 600145, former code 000022 and dated ST/reference 600381.
+  Two targeted groups of 600 requests then returned **1,198 complete / 2 recorded
+  network failures**. Original protocol responses, window/code/mode, terminal
+  page and returned-date checks are retained. Carried halt OHLC is never imported.
+  Supported SH/SZ windows have NOT established full-market or BSE coverage.
+- Eastmoney's original-provider raw/HFQ path succeeded on representative and
+  some targeted windows, unlike the incompatible alternative native HFQ scales.
+  After repeated proxy errors, the existing bounded transport's direct fallback
+  was also tested; repeated failures stopped that path. Of the original 935,
+  14 were imported, 2 remain unresolved after source checks, and 919 have not
+  completed the targeted queries. **Unqueried is not unavailable or no-data.**
+  Further bounded public-source collection needs no new paid authorization.
+- AKShare is the wrapper, not an independent provider. Sina, Eastmoney,
+  Tencent and BaoStock are identified separately; alternate interfaces to one
+  provider are not independent votes. BaoStock's upstream exchange-feed lineage
+  itself is not independently certified. Its existing explicit BSE rejection
+  was not retried unchanged. Sina MiniRacer decoding ran without security bypass.
+- BSE official pages returned HTTP 403 in this environment; no access workaround
+  was attempted. Public rule evidence includes the July 6, 2026 rule revision
+  and August 31 risk-warning implementation. Block volume enters daily total
+  but not instantaneous quotes; that does NOT establish vendor amount scope or
+  permit an estimated auction VWAP. Old rules are not applied blindly to 2026.
+- Remaining BSE per-security quality-date / unknown-gap counts:
+  **920014 9/0; 920396 23/0; 920639 0/0; 920765 10/0; 920833 1/0;
+  920970 10/0; 920371 1/0; 920375 4/0; 920701 2/7**.
+  920396's previous half-tick false positive stays fixed, but causal lineage is
+  unverified. 920014/639/765/833/970 still need dated factor/segment normalization.
+  920371/375/701 need comparable regular-auction OHLC, shares and yuan for the
+  September 4/11/28 cases. Zero quality flags for 920639 is not full approval.
+- Tushare `suspend_d` documentation was retrieved: daily S/R semantics, intraday
+  timing, documented start 2000-01-03, 5,000-row cap and entitlement requirements.
+  There is no configured authorization or live entitlement verification. If the
+  user already has an eligible subscription, the minimal optional action is
+  local credential configuration and permission for a small read-only sample.
+  Do not paste secrets in chat. Purchase is neither authorized nor proven to
+  solve all remaining needs. BSE licensed quote exports are also unverified.
+- Ignored `data_requirements.json` retains securities, known former codes (null
+  means unknown), exact date spans/dates, fields, attempted query evidence,
+  candidate-source limits and minimal actions. Validated-but-unqueried windows,
+  temporary network failures, access denial and unsupported identities are
+  separate outcomes. Historical pool/board/ST and factor publication chronology
+  remain blockers; no unused industry/concept/policy module was added to the gate.
+
+### Same-snapshot accounting, replay and validation
+
+- **16,285,599 - 4,101,050 pre-listing - 452,183 post-delisting
+  - 133,106 verified suspension - 120,256 unknown = 11,479,004 accepted rows**.
+  Physical formal rows **11,479,114 = 11,479,004 + 8 non-session + 102 echoes**.
+  No raw deletion; accepted non-session dates and duplicates are zero.
+- Securities **5,907 = 5,820 inside + 87 evidence-supported outside**; all 5,820
+  inside have some data, not necessarily complete/clean data. Coverage-only
+  categories change from 3,230 complete / 2,590 missing-or-conflicting to
+  **3,301 / 2,519**, with 87 whole-interval exemptions and zero segment exemptions.
+  Quality and causal qualification remain separate. Both benchmarks have all
+  **2,757** formal sessions, checked individually.
+- Replayed, in order, `echo_manifest.json`, `source_manifest.json` and
+  `additional_echo_manifest.json` from a new copy of the original batch 3 input.
+  **All 16 table counts and ordered-content SHA-256 digests match the new candidate**,
+  including 11,497,597 total bars. Repeated applications write **zero** rows.
+  Evidence hashes, prerequisite versions, changed source bars, competing repairs
+  and post-repair mutations fail explicitly; there is no silent source overwrite.
+- Targeted regression suite: **57 passed**. Full existing suite plus new tests:
+  **117 passed**. `pip check` passed. These use explicitly synthetic test fixtures
+  only, not replacement production history. Source field replay and full-data
+  rebuild checks are reported separately from unit-test success.
+- Git uses the complete MinGit 2.53.0 installation with its own HTTPS helper and
+  system GitHub credential flow. Historical tracked paths and 124 historical
+  blobs were checked for database/cache artifacts and common credential/private
+  key patterns; no matches. Only code/tests/this document are committed; all DBs,
+  reports, protocol responses, caches and credentials remain outside Git.
+  Remote backup is considered verified only after push and a fresh `ls-remote`
+  matches the actual local commit, not the cached tracking ref.
+
+Local deliverables: ignored `outputs/phase4_batch4/20261015/` containing
+`batch4_comparison.json/.txt`, `source_feasibility.json`,
+`blocker_reconciliation_before.json`, `data_requirements.json`,
+`warmup_readiness_after.json`, `bse_semantic_verdicts.json`,
+`replay_verification.json`, the three manifests and original response folders.
+Latest admission is `final_reaudit/admission/phase5a_admission_report.txt` with
+`blockers.json`. **Formal admission remains blocked; pause after this batch.**
+
+Primary source references: [BaoStock daily definitions](https://www.baostock.com/helpDocsHome?file=stockKData.md),
+[Tushare daily suspension interface](https://tushare.pro/document/2?doc_id=214),
+[BSE 2026 rules](https://www.bse.cn/jygl_list/200028217.html),
+[BSE risk-warning effective date](https://www.bse.cn/jygl_list/200029142.html).
 
 ## Phase 4 concentrated blocker repair, batch 3 (2026-10-14)
 
