@@ -2,6 +2,75 @@
 
 Checkpoint date: 2026-10-18
 
+## Three-security remaining-evidence pilot review (2026-10-18)
+
+- Started from verified clean HEAD
+  `b93c49dcead387f6ad51af4fd5b2088b842d71a8`. Only 000035/000033/000034;
+  formal interval **2015-06-01..2026-09-30** plus existing actual warmup.
+  No full-market download, 919-queue resume, strategy/risk edits or backtest.
+- Preserved the prior revision-2 snapshot
+  `8fbf51d2179d6442f73d51fff26e2d4f7f0a4df9a262dff15152082ca253ff1b`.
+  New isolated metadata-only final candidate, revision 4:
+  `fdcac9039118d4b374a8c6c108ed9ac719cb3f7108bccfd2ef1836ab0ffc8100`
+  (`outputs/phase4_pilot_evidence/20261018/final-v2.sqlite`). Intermediate
+  revision 3, original inputs and all evidence remain separate and preserved.
+- **15/15** actual post-anchor factor events now have issuer originals dated
+  before use; **15/15** reference prices reconcile, including excluded-buyback
+  dividend bases and 000033's explicitly announced 7.96 reference. Missing
+  event-announcement count is **0**, not a claim of complete factor certification.
+  One factor step is exact; **14** captured cumulative-factor steps have small
+  nonzero arithmetic residuals (maximum relative 3.51073452e-7). Provider
+  internal precision/rounding and known revision semantics are still unverified.
+  The previous half-last-digit assumption is not a provider rounding guarantee.
+  Missing historical download logs alone do not establish look-ahead; reliable
+  dated announcements can support reconstruction. No frozen factor/price rule
+  was changed. Sina HFQ comparison-only inputs are not primary-signal blockers.
+- Three bounded historical status/reference queries returned **6,099** unique
+  applicable sessions, no missing/extra dates or status conflicts:
+  **4,857** actual quotes + **1,242** documented halt days. No bars were created.
+- Reused the compare-and-set/replay tool to repair **17** metadata rows:
+  **10** unknown lock rows resolved from dated status/reference and rules;
+  **5** missed one-price limit flags corrected; **2** ex-reference price bounds
+  corrected. 000033's 2017 delisting period uses its documented 10% arrangement,
+  not today's no-limit first-delisting-session rule. All OHLC, volume, amount,
+  VWAP and signal prices remain exactly unchanged. A legal boundary/lock flag
+  is not proof that an order would fill.
+- Added a data-reader guard: unknown nullable lock flags now raise instead of
+  silently becoming `False`. No execution mode or quality tolerance changed.
+  This protects old research candidates as well as new data reads.
+- **4 VWAP cases remain blocked**: 000035/2015-07-17 and 2021-11-12,
+  000033/2015-04-29, 000034/2015-08-28. Same-response decoder tracing reproduced
+  all 4,857 original decoded rows, but decoder quantization is not evidence of
+  publisher rounding or matching auction/block/off-session scope. No error
+  interval was invented; no clamp, raw-value replacement or check bypass.
+  OPEN does not execute at VWAP, but `HistoricalBar` still validates it
+  unconditionally; volume remains a selector input. The OPEN configuration
+  basis is the prior frozen report and unchanged default, not an invented run.
+- Remaining legal-bound metadata: **52 dates = 41 missing-bound dates + 11
+  ex-reference discrepancies**. Their lock flags currently agree with the
+  reference hypothesis; these are not 52 proven erroneous fills. Intermediate
+  rule-version links remain unfinished for **3,321 stock-days**, overlapping
+  those dates, not additive. Exact lists and needed rule editions are local.
+  Provider trading-scope definitions remain open for three covered intervals;
+  **541** cross-source turnover-difference dates remain unchanged. The previous
+  corporate-action position/share/cash/stop reconciliation limitation is retained,
+  not silently dropped or treated as an unused enhancement.
+- Validation: **3 new targeted tests + 8 existing scoped-price tests passed**;
+  **full suite 133 passed**. Both metadata manifests independently replayed
+  exactly and repeated with **0 writes**. All 4,857 final bars were checked;
+  only the same four VWAP cases reject construction. Price/volume/signal fields
+  and all 1,242 halt records match the preserved prior candidate. Prior price
+  segmentation/cutoff checks remain applicable because their inputs/rule hashes
+  did not change; this turn did not rebuild those price sequences.
+- Local-only delivery: `pilot_acceptance_report.txt`, `initial_blockers.json`,
+  `blockers.json`, `pilot_admission.json`, per-event/4-VWAP/52-date evidence,
+  manifests and validation under `outputs/phase4_pilot_evidence/20261018/`.
+  **A coverage/reproducibility passes; B remains partial; C remains blocked**
+  for all three. No formal usability or migration expansion approved. The
+  326-security/528-boundary investigation list remains untouched and separate.
+  Git delivery/live remote verification is recorded locally in `delivery.json`.
+  Stop after this review; no background run or automatic next phase.
+
 ## Three-security independent price version (2026-10-18, research only)
 
 - Started at actual HEAD `8240894d8f9b9f9142fc470769d08f21ebb4e3a7`,

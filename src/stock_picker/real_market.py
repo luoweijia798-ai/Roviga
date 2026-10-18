@@ -1549,6 +1549,14 @@ class TushareAdapter:
 
 
 def _row_to_bar(row: sqlite3.Row) -> HistoricalBar:
+    # Research candidates may retain unknown lock states as NULL. Converting
+    # those to bool(None) would silently grant execution eligibility.
+    for field in ("limit_up_locked", "limit_down_locked"):
+        if row[field] is None:
+            raise ValueError(
+                f"{row['symbol']} {row['trading_date']}: unknown {field}; "
+                "historical trading-state evidence is required"
+            )
     return HistoricalBar(
         trading_date=date.fromisoformat(row["trading_date"]),
         symbol=row["symbol"],
