@@ -1,6 +1,111 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-15
+Checkpoint date: 2026-10-18
+
+## Three-security independent price version (2026-10-18, research only)
+
+- Started at actual HEAD `8240894d8f9b9f9142fc470769d08f21ebb4e3a7`,
+  with a clean worktree. Existing attribution and exact input identity were
+  read; no reset, baseline replacement or full-market migration occurred.
+- Preserved input snapshot:
+  `481cae3da8aa651657b99b85e9df7f46127dc8c96fd9d05ae7b93ccb662038fd`
+  (`outputs/phase4_access/20261018/final.sqlite`, revision 81908).
+- New isolated three-security snapshot:
+  `8fbf51d2179d6442f73d51fff26e2d4f7f0a4df9a262dff15152082ca253ff1b`
+  (`outputs/phase4_three_security/20261018/final.sqlite`, revision 2).
+  Formal interval remains **2015-06-01..2026-09-30**. October is excluded.
+- Frozen rule is documented in
+  [PHASE4_THREE_SECURITY_PRICE_RULE.md](docs/PHASE4_THREE_SECURITY_PRICE_RULE.md):
+  Sina KLC raw OHLC/volume/amount; BaoStock reference-price factor;
+  `signal(t) = raw(t) * F(t) / F(fixed prior-quote anchor)`. This is not a
+  dividend-reinvestment total-return claim. A separately stored Sina-factor
+  control is never spliced into the primary sequence. Selection was based on
+  explicit semantics and reproducibility, not performance or old-price fit.
+
+### Actual coverage and evidence
+
+| Security | Real price range | Real rows | Formal rows | Prior rows | Full-day halt evidence | Unknown dates |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 000035 | 2015-05-29..2026-09-30 | 2,455 | 2,454 | 1 | 303 | 0 |
+| 000033 | 2015-04-29..2017-07-06 | 31 | 30 | 1 | 504 | 0 |
+| 000034 | 2015-03-20..2026-09-30 | 2,371 | 2,370 | 1 | 435 | 0 |
+
+- **6,099 applicable sessions = 4,857 real quotes + 1,242 documented halt
+  days**. No synthetic/carry-forward bars. 000033's final trade 2017-07-06
+  remains distinct from its delisting date 2017-07-07.
+- Raw history was reused, not downloaded again. **46** bounded daily status/
+  event-reference queries completed; **16** annual event queries yielded
+  **14** nonempty results and **2** successful empty responses for 000033,
+  not evidence of no event. Issuer originals supplied the latter explanation.
+- Current enabled momentum requires one previous **actual** quote, not a
+  previous calendar session. Intervening pre-first-signal halt sessions are
+  0/504/111 respectively. Numerical warmup and daily continuity pass;
+  historical causal qualification remains unproved. No MA/ATR/breakout is
+  enabled. Existing benchmark 19-prior-close counts were checked read-only;
+  benchmarks are not replaced/copied into this three-stock experiment.
+- 000035's original 2007 issuer announcement was extracted and visually
+  reviewed: eligible tradable shareholders receive the reserve transfer;
+  the special no-ex-right-reference arrangement explains why reference-price
+  and share-distribution adjustments differ. Pre-anchor normalization does
+  not erase this distinction or assert identical economic meaning.
+- On **2026-06-08/09**, raw close is **5.21 -> 5.09**, legacy signal
+  **24.79 -> 26.26**, new signal **10.72487746 -> 10.47785533**.
+  Both captured factor sources have no step at this boundary; Bao reference
+  previous close is 5.21. The 2026 distribution effective date is August 20,
+  not June 9. Legacy segment mixing is strongly suspected, but exact old
+  provider/segment lineage remains unknown; no unsupported provenance claim.
+- 000033 issuer originals distinguish the **2016-04-15** capital-transfer
+  date from reference-price adjustment on resumption, **2017-05-24**.
+  The issuer's published reference is **7.96**, not prior actual **10.38**.
+  Supplemental issuer evidence is separately hashed, not a silent factor or
+  price-version rewrite. 000034's nine in-window factor events were checked,
+  including an effective event during suspension without creating a price row.
+
+### Validation and remaining blockers
+
+- Both complete sequences: **24 segment comparisons** and **78 time-cutoff
+  comparisons** exact; repeated derivation exact; raw fields unchanged.
+  All **15** in-window primary factor steps match reference-price arithmetic
+  within predeclared source-digit precision propagation, not relaxed quality
+  thresholds. Effective-date invariance is not proof of historical availability.
+- Independent database replay matches every row of bars (4,857), session
+  evidence (1,242), stocks (3), metadata (8), and patch journal (1).
+  Reapplying the 6,106-change manifest writes **0** rows. No duplicate prices.
+- **Targeted tests: 8 passed; full suite: 130 passed.** Clearly synthetic
+  unit fixtures remain separate from actual provider validation. No real
+  backtest, orders, positions or investment returns were produced.
+- **541** overlapping stock-days retain cross-source turnover differences;
+  volume differs on 55 rows (maximum 3 shares), amount on 514 (maximum 64 yuan).
+  These overlap; they are not 569 unique anomalies. Precision is a lead, not
+  proof of equal trading scope. Four strict VWAP/range marks remain unchanged.
+- Seven raw OHLC differences from legacy are corroborated by current Sina
+  and targeted Bao observations and retained with old/new values. Unknown
+  legacy origin stays unknown. Three new prior quotes plus those seven rows
+  have unknown limit-lock states, stored as NULL in the isolated research
+  schema; inherited legacy limits elsewhere are still unverified.
+- Historical factor publication/revision evidence, historical ST/limit rules,
+  turnover precision/scope, and corporate-action reconciliation of raw stop/
+  holding inputs remain blockers. No selector/risk change or parameter tuning.
+- Read-only legacy screen: **46,746** pairs / **5,752** other securities at
+  **11 theoretical** segment boundaries; **528 suspect pairs / 326 securities**.
+  Actual per-segment logs are missing. Pending event/affine-formula/source
+  explanations mean these are not 326 confirmed bad securities. No rewrites.
+- All original evidence, two failed empty initialization databases and the
+  independent replay are retained locally. Existing CAS/snapshot tools were
+  reused, not replaced with a new framework. Final source/snapshot/strategy
+  hashes and the unchanged frozen 919-task-list hash were checked.
+- Local detailed delivery: `outputs/phase4_three_security/20261018/` contains
+  `three_security_report.txt`, frozen rules, raw/source manifests, primary and
+  control prices, event evidence, old/new differences, validation/replay/closing
+  checks, readonly scan and final identity. These data/reports are ignored by Git.
+- **Formal gate stays CLOSED for all three and the market.** Do not subtract
+  this scoped experiment from old full-market audit counts or mark the 919
+  queue complete. Recommend resolving the named evidence issues before any
+  broader migration; no queue restart or background continuation is promised.
+
+The older checkpoint below remains historical context, not the current online
+access verdict. Code/document delivery and live remote hash are recorded locally
+in this experiment's `delivery.json` after commit/push.
 
 ## Phase 4 targeted warmup queue, batch 5 (2026-10-15, execution blocked)
 

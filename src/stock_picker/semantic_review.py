@@ -1289,6 +1289,74 @@ REPAIR_KEYS={'bars':('trading_date','symbol'),'session_evidence':('symbol','trad
              'provider_quarantine':('symbol','trading_date','source'),'metadata':('key',)}
 
 
+def derive_scoped_signal_prices(rows: list[dict], factors: list[dict], rule: dict) -> list[dict]:
+    """Pure three-security experiment, not a market-wide adjustment migration.
+
+    A frozen provider factor version is normalized at a fixed pre-window anchor.
+    This proves deterministic effective-date processing, NOT historical source
+    availability. Unknown publication times stay unknown. Execution fields are
+    copied unchanged; caller must keep this research-only output behind the gate.
+    Every segment must receive the same rule, anchor and evidence version.
+    """
+    from decimal import Decimal, ROUND_HALF_EVEN, localcontext
+    allowed = {'000033', '000034', '000035'}
+    symbol = rule['symbol']
+    if symbol not in allowed or rule.get('formal_gate_eligible') is not False:
+        raise ValueError('only the explicitly scoped gated experiment is supported')
+    if rule.get('formula') != 'raw * cumulative_factor(date) / cumulative_factor(anchor)':
+        raise ValueError('unknown candidate formula')
+    if rule.get('quantum') != '0.00000001' or rule.get('rounding') != 'ROUND_HALF_EVEN':
+        raise ValueError('precision must be frozen, not tuned after comparison')
+    anchor = rule['anchor_date']
+    date.fromisoformat(anchor)
+    dated = {}
+    for item in factors:
+        day = item['effective_date']; date.fromisoformat(day)
+        if item['symbol'] != symbol or not item.get('source_sha256'):
+            raise ValueError('factor identity or evidence missing')
+        value = Decimal(str(item['cumulative_factor']))
+        if not value.is_finite() or value <= 0:
+            raise ValueError('nonpositive/nonfinite factor')
+        if day in dated:
+            raise ValueError('duplicate factor date requires explicit evidence resolution')
+        dated[day] = item
+    initial = [d for d in dated if d <= anchor]
+    if not initial:
+        raise ValueError('no anchor factor; never borrow a future factor')
+    base_item = dated[max(initial)]
+    output = []; seen = set()
+    for row in sorted(rows, key=lambda r: r['date']):
+        day = row['date']; date.fromisoformat(day)
+        if row['symbol'] != symbol or day < anchor or day > rule['end_date']:
+            raise ValueError('row outside frozen security/date scope')
+        if day in seen:
+            raise ValueError('duplicate real quote')
+        seen.add(day)
+        if any(k.startswith('signal_') for k in row):
+            raise ValueError('input must be original unadjusted fields')
+        if str(row.get('tradestatus', '1')) != '1' or Decimal(str(row['volume'])) <= 0:
+            raise ValueError('suspension/zero-volume status is not a real price row')
+        item = dated[max(d for d in dated if d <= day)]
+        with localcontext() as context:
+            context.prec = 40
+            scale = Decimal(str(item['cumulative_factor'])) / Decimal(str(base_item['cumulative_factor']))
+            adjusted = {}
+            for key in ('open', 'high', 'low', 'close'):
+                raw = Decimal(str(row[key]))
+                if not raw.is_finite() or raw <= 0:
+                    raise ValueError('invalid raw price')
+                adjusted['signal_' + key] = str((raw * scale).quantize(Decimal(rule['quantum']), rounding=ROUND_HALF_EVEN))
+        output.append({**row, **adjusted,
+            'adjustment_lineage': {'rule_version': rule['version'],
+                'anchor_date': anchor, 'anchor_factor': base_item['cumulative_factor'],
+                'factor': item['cumulative_factor'], 'effective_date': item['effective_date'],
+                'source_sha256': item['source_sha256'], 'captured_at': item.get('captured_at'),
+                'historical_available_at': item.get('historical_available_at'),
+                'verification_status': item['verification_status'],
+                'formal_gate_eligible': False}})
+    return output
+
+
 def apply_evidence_patch(cache, manifest: dict) -> dict:
     """Existing candidate repair workflow: atomic, deterministic compare-and-set.
 
