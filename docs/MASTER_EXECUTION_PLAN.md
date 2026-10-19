@@ -6,6 +6,21 @@ Old batch-end pauses/three-only/no-919 rules are superseded CONDITIONALLY.
 No real broker or funds. Do not treat completion of this plan as completion
 of its implementation.
 
+## Latest user decision: data and readiness delivery only
+
+2026-10-19: the user explicitly chose “先保持模型不变，仅交付数据与未就绪界面”.
+This narrows the current execution scope. Keep the actual OPEN model unchanged;
+do not change fills, fees, strategy or risk behavior. No return backtest, 919
+resume or migration expansion is authorized by this continuation. The broader
+stages below remain a roadmap, not automatic current work. No model decision
+is awaiting an answer: the user selected a limited deliverable, not validation
+or waiver of OPEN's unresolved causal/capacity/accounting limitations.
+
+Continue read-only data verification and readiness delivery. Preserve candidate
+revision 6 and its existing evidence. Remaining four VWAP dates and three
+turnover-scope intervals still need source material; duplicate requests without
+new evidence are not useful progress. Runtime reports stay local and ignored.
+
 ## Verified checkpoint
 
 - Initial local HEAD and live remote main:
@@ -110,7 +125,7 @@ See `OPERATIONS.md` for tested entry points. Safe current continuation:
 
 ```powershell
 $env:PYTHONPATH = 'src'
-.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation readiness --snapshot-identity outputs/phase4_pilot_final/20261019/final_reference_identity.json --admission-report outputs/phase4_pilot_final/20261019/pilot_admission.json --report outputs/phase4_pilot_final/20261019/readiness
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation readiness --snapshot-identity outputs/phase4_pilot_final/20261019/final_reference_identity.json --admission-report outputs/phase4_pilot_final/20261019/pilot_admission.json --data-requirements outputs/phase4_pilot_final/20261019/data_requirements.json --report outputs/phase4_pilot_final/20261019/readiness
 ```
 
 Needed source evidence: original same-trade-scope raw OHLC/quantity/amount and
@@ -120,12 +135,11 @@ applicable intervals. Existing KLC original decoder, Bao overlaps and official
 exchange definitions do not establish KLC publishing quantization/scope.
 Do not re-request the same prices expecting a contract to appear.
 
-One consolidated execution decision was requested: retain OPEN as the target
-and obtain opening-time evidence before approving concrete quantity/rejection
-rules, or keep the current model untouched and deliver readiness-only pending
-evidence. No response yet at this checkpoint. Do not silently infer permission
-to switch mode or invent capacity/partial-fill parameters. Cash/share/payment
-entitlements across the 15 events and dated cost schedules remain required.
+The consolidated execution question has been answered: keep the model untouched
+and deliver data/readiness only. Do not request the same choice again or infer
+permission to switch mode or invent capacity/partial-fill parameters. Cash/share/
+payment entitlements across the 15 events and dated costs remain unresolved
+future execution prerequisites, outside the current repair authorization.
 
 Independent engineering above is completed to its stated boundary. The remaining
 operational candidate/fill/tracking paths depend on the unresolved source/model

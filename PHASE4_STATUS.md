@@ -2,6 +2,30 @@
 
 Checkpoint date: 2026-10-19
 
+## User-selected limited delivery / readiness evidence display (2026-10-19)
+
+- Continued from clean `cc477b04fbe01c72dce165d7e454d8039b98b4e7`.
+- Recorded the user's explicit choice: keep the execution model unchanged,
+  deliver data and the not-ready interface only. This supersedes automatic
+  progression in the prior master mandate for the current scope. The model
+  question is answered; its data/causal limitations are not waived.
+- Existing readiness entry now accepts the existing `data_requirements.json`:
+  verifies snapshot/revision, deduplicated counts and raw values against the
+  read-only candidate; displays concrete dates/intervals and missing materials.
+  Missing/invalid evidence is unavailable, never zero blockers. Corrupt history
+  is disclosed and retained. No new scheduler or audit framework.
+- Actual candidate remains revision 6,
+  `82ea94b71c49c70c1ab47f944f8613506cf9c0923b70d50bd55b595d449b382a`:
+  4,857 quotes, four VWAP dates, three scope intervals; no new data repair is
+  claimed. A/B conclusions and C blockers are unchanged. No duplicate preaudit
+  or replay of unchanged data. No strategy/model changes, migration or backtest.
+- Visual browser inspection remains unverified following the earlier security
+  restriction; do not claim structural tests are visual QA.
+- Verification: **14 readiness tests passed (8 new), full suite 158 passed**.
+  Existing real candidate command returned DATA_NOT_READY, no evidence-read
+  errors; report scope is four raw date records / three statistical intervals.
+  Software tests do not prove publisher rounding or resolve these blockers.
+
 ## Master mandate / pilot reconstruction and operational safeguards (2026-10-19)
 
 The user's master mandate now governs continuation; older batch-end pause and

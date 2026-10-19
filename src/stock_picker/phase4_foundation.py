@@ -219,6 +219,8 @@ def main() -> None:
                         help="exact saved pilot identity; readiness never writes this database")
     parser.add_argument("--admission-report", type=Path,
                         help="existing layered pilot admission JSON for readiness display")
+    parser.add_argument("--data-requirements", type=Path,
+                        help="existing snapshot-bound missing-evidence list; readiness display only")
     parser.add_argument("--formal-binding", type=Path,
                         help="verified full-market snapshot/config/code binding; never a pilot report")
     parser.add_argument("--symbol-limit", type=int)
@@ -239,7 +241,8 @@ def main() -> None:
             parser.error("readiness requires --snapshot-identity and --admission-report")
         from .sync_monitor import pilot_readiness
         from .reporting import write_pilot_readiness
-        payload = pilot_readiness(args.snapshot_identity, args.admission_report)
+        payload = pilot_readiness(args.snapshot_identity, args.admission_report,
+                                  requirements_path=args.data_requirements)
         page = write_pilot_readiness(payload, args.report)
         print(json.dumps({"status": payload['status'], "page": str(page.resolve()),
                           "strategy_evaluated": False, "evidence_errors": payload['evidence_errors']}, ensure_ascii=False, indent=2))

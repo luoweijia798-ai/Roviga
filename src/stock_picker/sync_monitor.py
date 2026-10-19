@@ -162,7 +162,7 @@ def _status_payload(status: Any | None) -> dict[str, Any] | None:
     }
 
 
-def pilot_readiness(identity_path: Path, admission_path: Path, *, now=None) -> dict:
+def pilot_readiness(identity_path: Path, admission_path: Path, *, requirements_path: Path | None = None, now=None) -> dict:
     """Read-only pilot prerequisite check, NOT the operational daily selector.
 
     A pilot pass cannot authorize full-market observations. Never call selector,
@@ -182,6 +182,9 @@ def pilot_readiness(identity_path: Path, admission_path: Path, *, now=None) -> d
         'signal_date': None, 'status': 'DATA_NOT_READY', 'candidate': None,
         'strategy_evaluated': False, 'risk_status': 'NOT_EVALUATED',
         'formal_backtest_authorized': False, 'operational_observation': False,
+        'delivery_scope': 'DATA_AND_READINESS_ONLY',
+        'execution_model_changed': False,
+        'requirements_status': 'NOT_PROVIDED' if requirements_path is None else 'INVALID',
         'last_successful_signal_at': None,
         'reason': '三只试点不能替代全市场准入和首次基准回测；未执行选股。',
         'evidence_errors': [], 'data_latest_date': None}
@@ -196,6 +199,8 @@ def pilot_readiness(identity_path: Path, admission_path: Path, *, now=None) -> d
         admission = json.loads(admission_bytes)
         if admission['snapshot']['id'] != identity['id']:
             raise ValueError('admission belongs to a different snapshot')
+        if admission['snapshot'].get('data_revision') != identity['data_revision']:
+            raise ValueError('admission belongs to a different data revision')
         if admission.get('formal_interval') != ['2015-06-01', '2026-09-30']:
             raise ValueError('unexpected pilot interval')
         with SnapshotCache(snapshot_path).connect() as connection:
@@ -205,7 +210,47 @@ def pilot_readiness(identity_path: Path, admission_path: Path, *, now=None) -> d
             counts=admission.get('counts', {}), securities=admission.get('securities', {}),
             evidence_files={'identity_sha256': hashlib.sha256(identity_bytes).hexdigest(),
                             'admission_sha256': hashlib.sha256(admission_bytes).hexdigest()},
+            admission_generated_at=admission.get('generated_at'),
+            formal_interval=admission['formal_interval'],
             data_capture_time_claim='unknown; file/report refresh is not a download timestamp')
+        if requirements_path is not None:
+            payload['requirements_status'] = 'INVALID'
+            requirements_bytes = requirements_path.read_bytes()
+            requirements = json.loads(requirements_bytes)
+            if (requirements['snapshot']['id'] != identity['id']
+                    or requirements['snapshot'].get('data_revision') != identity['data_revision']):
+                raise ValueError('data requirements belong to a different snapshot/revision')
+            dates = requirements['four_dates']
+            scopes = requirements['turnover_scope']
+            if not isinstance(dates, list) or not isinstance(scopes, list):
+                raise ValueError('data requirements must contain lists')
+            date_keys = {(item['symbol'], item['date']) for item in dates}
+            scope_keys = {(item['symbol'], item['start'], item['end']) for item in scopes}
+            if len(date_keys) != len(dates) or len(scope_keys) != len(scopes):
+                raise ValueError('duplicate data requirements would inflate blocker counts')
+            if (len(dates) != admission['counts']['vwap_dates']
+                    or len(scopes) != admission['counts']['scope_intervals']):
+                raise ValueError('data requirements counts do not reconcile with admission')
+            fields = ('open', 'high', 'low', 'close', 'volume', 'amount', 'vwap')
+            with SnapshotCache(snapshot_path).connect() as connection:
+                for item in dates:
+                    actual = connection.execute(
+                        'SELECT open, high, low, close, volume, amount, vwap FROM bars '
+                        'WHERE symbol=? AND trading_date=?',
+                        (item['symbol'], item['date'])).fetchone()
+                    if actual is None or any(actual[i] != item['raw'][name]
+                                             for i, name in enumerate(fields)):
+                        raise ValueError('requirement raw values differ from candidate')
+                    if not item['need']:
+                        raise ValueError('requirement must state missing evidence')
+            for item in scopes:
+                if (item['symbol'] not in admission['securities']
+                        or date.fromisoformat(item['start']) > date.fromisoformat(item['end'])
+                        or not item['fields'] or not item['need']):
+                    raise ValueError('invalid turnover scope requirement')
+            payload.update(requirements_status='BOUND_TO_SNAPSHOT',
+                           data_requirements=requirements)
+            payload['evidence_files']['requirements_sha256'] = hashlib.sha256(requirements_bytes).hexdigest()
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
         payload['evidence_errors'].append(str(error))
         payload['reason'] = '数据或验收证据读取失败；未执行选股，不表示策略主动空仓。'

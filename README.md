@@ -10,6 +10,8 @@ Current master execution checkpoint: [plan](docs/MASTER_EXECUTION_PLAN.md),
 [Phase 4 status](PHASE4_STATUS.md), and [tested readiness/backup/recovery entry](docs/OPERATIONS.md).
 The three-stock candidate is still gated; the local readiness page is **not** a
 completed daily selection service or proof of full-market/backtest admission.
+Latest user-selected scope (2026-10-19): keep the execution model unchanged;
+deliver data and the not-ready interface only. No automatic migration or returns.
 
 ## Current capabilities
 

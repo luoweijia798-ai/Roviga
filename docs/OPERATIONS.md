@@ -4,6 +4,10 @@ Current state: pilot C blocked, formal gate closed. This document does not claim
 the full daily paper-observation edition is finished. No real broker or funds.
 Run from the Roviga repository; preserve all existing data and user changes.
 
+Latest user choice, 2026-10-19: **keep the execution model unchanged; deliver
+data and the not-ready interface only**. This is not an approved final OPEN
+contract. No automatic migration expansion, 919 resume or real return run.
+
 ## Tested now: readiness, not selection
 
 Existing Python 3.12.14 environment passed `pip check`; no upgrade was performed.
@@ -13,7 +17,7 @@ now produces a dependency-free local HTML prerequisite view.
 ```powershell
 $env:PYTHONPATH = 'src'
 $env:PYTHONIOENCODING = 'utf-8'
-.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation readiness --snapshot-identity outputs/phase4_pilot_final/20261019/final_reference_identity.json --admission-report outputs/phase4_pilot_final/20261019/pilot_admission.json --report outputs/phase4_pilot_final/20261019/readiness
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation readiness --snapshot-identity outputs/phase4_pilot_final/20261019/final_reference_identity.json --admission-report outputs/phase4_pilot_final/20261019/pilot_admission.json --data-requirements outputs/phase4_pilot_final/20261019/data_requirements.json --report outputs/phase4_pilot_final/20261019/readiness
 ```
 
 Actually returned DATA_NOT_READY and zero evidence errors. Open the resulting
@@ -26,6 +30,21 @@ is a view. These are not selected candidates, front-running observations, 20
 trading days of history, or investment outcomes. Calendar eligibility, risk and
 selection have not been evaluated, so no fake non-trading/no-candidate label is
 substituted for missing readiness. A pilot pass cannot unlock this interface.
+
+The optional `--data-requirements` reads the existing local list; it does not
+query a source or repair prices. It verifies snapshot ID/revision, unique
+security-date/interval counts against admission, and each listed raw OHLC/volume/
+amount/VWAP against the read-only candidate. This binds displayed evidence needs,
+not their truth or resolution. Missing/invalid lists are explicitly unavailable,
+not zero blockers. The page displays the four exact dates and three intervals,
+retains raw report details, and separates report creation from inspection time.
+Damaged check-history records are counted and preserved, not fabricated or
+silently rewritten. No refresh schedule was installed.
+
+Latest limited-delivery verification: **14 readiness tests passed (8 new),
+158 full-suite tests passed**; actual existing candidate invocation returned
+DATA_NOT_READY with no evidence-read errors. Snapshot hash unchanged. These
+are software/read-only binding checks, not a new data audit or visual QA.
 
 ## Snapshot backup (actually exercised outside repository)
 
@@ -142,5 +161,6 @@ first returns. Do not silently switch modes or invent parameters.
 
 Open-source exports/permissions still required are itemized locally in
 `outputs/phase4_pilot_final/20261019/data_requirements.json`. No password or Token
-in chat; no purchased-service availability guarantee. Until these and the model
-decision are resolved, the correct visible state remains DATA_NOT_READY.
+in chat; no purchased-service availability guarantee. The model decision is now
+recorded: keep it unchanged and limit delivery to data/readiness. Evidence and
+model limitations remain, so the correct visible state stays DATA_NOT_READY.
