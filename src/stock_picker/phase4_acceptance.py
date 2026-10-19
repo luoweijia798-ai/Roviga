@@ -284,7 +284,11 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, help="reuse a previously frozen snapshot")
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--reuse-audit", action="store_true")
+    parser.add_argument("--backup-only", action="store_true",
+                        help="online SQLite backup + identity/integrity verification; no audit/backtest")
     args = parser.parse_args()
+    if args.backup_only and (args.snapshot or args.evidence or args.reuse_audit):
+        parser.error("--backup-only uses --cache and --output, not snapshot/evidence/audit options")
     run = args.snapshot.parent if args.snapshot else args.output / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     identity = run / "snapshot_identity.json"
     snapshot = json.loads(identity.read_text(encoding="utf-8")) if args.snapshot else freeze_database(args.cache, run / "snapshot.sqlite")
@@ -292,6 +296,16 @@ def main() -> None:
         verify_snapshot(args.snapshot, snapshot)
     print(json.dumps({"snapshot": snapshot}, ensure_ascii=False), flush=True)
     cache = SnapshotCache(Path(snapshot["path"]))
+    if args.backup_only:
+        verify_snapshot(Path(snapshot['path']), snapshot)
+        with cache.connect() as connection:
+            integrity = [row[0] for row in connection.execute('PRAGMA integrity_check')]
+        identity.write_text(json.dumps(snapshot, indent=2), encoding='utf-8')
+        if integrity != ['ok']:
+            raise ValueError('backup integrity check failed; preserve artifact for diagnosis')
+        print(json.dumps({'backup_verified': True, 'integrity': integrity,
+                          'identity': str(identity.resolve()), 'offsite_backup': False}))
+        return
     audit = (json.loads((run / "preaudit/audit_report.json").read_text(encoding="utf-8")) if args.reuse_audit else
              RealMarketDataAuditor(cache).run(start_date=PHASE4_START, end_date=ACCEPTANCE_END, output=run / "preaudit").payload)
     identity.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")

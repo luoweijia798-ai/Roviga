@@ -160,3 +160,53 @@ def _status_payload(status: Any | None) -> dict[str, Any] | None:
         "source": status.source,
         "last_error": status.last_error,
     }
+
+
+def pilot_readiness(identity_path: Path, admission_path: Path, *, now=None) -> dict:
+    """Read-only pilot prerequisite check, NOT the operational daily selector.
+
+    A pilot pass cannot authorize full-market observations. Never call selector,
+    broker, synchronizer or an auditor here. This status cannot become a strategy
+    cash/no-candidate decision by editing an admission boolean.
+    """
+    import hashlib
+    import sqlite3
+    from datetime import timedelta
+    from .phase4_acceptance import SnapshotCache, verify_snapshot
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError('readiness timestamp must be timezone-aware')
+    local = instant.astimezone(timezone(timedelta(hours=8), name='Asia/Shanghai'))
+    payload = {'schema_version': 1, 'kind': 'pilot_readiness_check',
+        'observed_at': local.isoformat(), 'timezone': 'Asia/Shanghai',
+        'signal_date': None, 'status': 'DATA_NOT_READY', 'candidate': None,
+        'strategy_evaluated': False, 'risk_status': 'NOT_EVALUATED',
+        'formal_backtest_authorized': False, 'operational_observation': False,
+        'last_successful_signal_at': None,
+        'reason': '三只试点不能替代全市场准入和首次基准回测；未执行选股。',
+        'evidence_errors': [], 'data_latest_date': None}
+    try:
+        identity_bytes = identity_path.read_bytes()
+        identity = json.loads(identity_bytes)
+        snapshot_path = Path(identity['path'])
+        if not snapshot_path.is_absolute():
+            raise ValueError('snapshot identity must use a full absolute path')
+        verify_snapshot(snapshot_path, identity)
+        admission_bytes = admission_path.read_bytes()
+        admission = json.loads(admission_bytes)
+        if admission['snapshot']['id'] != identity['id']:
+            raise ValueError('admission belongs to a different snapshot')
+        if admission.get('formal_interval') != ['2015-06-01', '2026-09-30']:
+            raise ValueError('unexpected pilot interval')
+        with SnapshotCache(snapshot_path).connect() as connection:
+            coverage = connection.execute('SELECT COUNT(*), COUNT(DISTINCT symbol), MAX(trading_date) FROM bars').fetchone()
+        payload.update(snapshot_id=identity['id'], data_revision=identity['data_revision'],
+            data_latest_date=coverage[2], quote_rows=coverage[0], security_count=coverage[1],
+            counts=admission.get('counts', {}), securities=admission.get('securities', {}),
+            evidence_files={'identity_sha256': hashlib.sha256(identity_bytes).hexdigest(),
+                            'admission_sha256': hashlib.sha256(admission_bytes).hexdigest()},
+            data_capture_time_claim='unknown; file/report refresh is not a download timestamp')
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+        payload['evidence_errors'].append(str(error))
+        payload['reason'] = '数据或验收证据读取失败；未执行选股，不表示策略主动空仓。'
+    return payload

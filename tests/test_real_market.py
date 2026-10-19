@@ -428,7 +428,7 @@ class AkShareAdapterTests(unittest.TestCase):
             self.assertIn(("20150601", "20150602"), successful_ranges)
             self.assertIn(("20150603", "20150604"), successful_ranges)
 
-    def test_foundation_runner_uses_sqlite_and_writes_data_audit(self) -> None:
+    def test_generic_passing_audit_alone_cannot_authorize_formal_run(self) -> None:
         with _test_directory() as directory:
             root = Path(directory)
             cache = SQLiteMarketCache(root / "market.sqlite")
@@ -441,15 +441,12 @@ class AkShareAdapterTests(unittest.TestCase):
                 start_date=PHASE4_START, end_date=END
             )
 
-            result = Phase4FoundationRunner(cache.path).run(
-                end_date=END, report_directory=root / "report"
-            )
-
-            self.assertEqual(result.backtest.start_date, PHASE4_START)
-            self.assertEqual(result.backtest.end_date, END)
+            from stock_picker.phase4_foundation import DataCoverageError
+            with self.assertRaisesRegex(DataCoverageError, 'admission binding is missing'):
+                Phase4FoundationRunner(cache.path).run(
+                    end_date=END, report_directory=root / "report")
             self.assertTrue(audit.passed)
-            self.assertTrue((result.report_directory / "data_manifest.json").exists())
-            self.assertTrue((result.report_directory / "data_coverage.json").exists())
+            self.assertFalse((root / 'report').exists())
 
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")

@@ -1,6 +1,73 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-18
+Checkpoint date: 2026-10-19
+
+## Master mandate / pilot reconstruction and operational safeguards (2026-10-19)
+
+The user's master mandate now governs continuation; older batch-end pause and
+three-only/no-queue-resume statements below describe historical checkpoints,
+not unconditional current restrictions. See [master plan](docs/MASTER_EXECUTION_PLAN.md).
+Expand only after actual pilot admission, then 20/100/remaining, and run the
+first real baseline only after fixed full-market admission. Neither is met yet.
+
+- Started at local/live remote `59b06da1393459931385ad4bf836acfb35353961`, clean.
+  Kept all old snapshots, raw sources and the live-sync database untouched.
+- Closed **52 legal-limit dates / 104 fields** using retrieved official historical
+  rule archives, dated status/reference fields and existing issuer originals.
+  All 4,857 quote dates now link to the applicable rule version; 3,321 missing
+  intermediate links are no longer unresolved. No raw price/turnover/lock changes.
+  Revision 5: `96949ab4140d61f342d402b4205410cdedc53a73def0433463f6e503629ff886`.
+- Local 40-vs-80 Decimal recomputation found zero output discrepancies across
+  19,428 signal fields. The 14 old supplier numerical residuals were not caused
+  by local premature rounding. Supplier precision/revisions remain unknown.
+- Built isolated reference-input v2 under the same fixed-anchor economic formula:
+  exact products of evidenced previous-actual-close / effective reference-price
+  steps, not captured rounded provider cumulative factors. All 15 issuer events
+  and every intervening reference transition reconcile. No fitted ratio, mixed
+  HFQ seam, future event or altered strategy parameter. See
+  [explicit v2 rule and limits](docs/PHASE4_REFERENCE_RECONSTRUCTION.md).
+  The old 14 cases remain v1/comparison limitations, not falsely certified.
+- Latest candidate revision **6**:
+  `82ea94b71c49c70c1ab47f944f8613506cf9c0923b70d50bd55b595d449b382a`,
+  `outputs/phase4_pilot_final/20261019/final-reference-v2.sqlite`.
+  **3,105** signal-date rows changed: 1,044 / 30 / 2,031 for 000035 / 000033 /
+  000034, plus two metadata keys. Largest signal-price differences from v1:
+  0.00000304 / 0.00000304 / 0.00001141. Raw execution data and 1,242 halt
+  records unchanged. Twelve segmentation and 39 cutoff checks, 19,428 exact
+  100-digit independent comparisons, repeat zero writes and replay equality pass.
+- A coverage/replay passes; B supported within the declared v2 reconstruction,
+  with current retrieval and historical announcement dates distinct, no claimed
+  historical download archive. **C still blocked for all three**: four strict
+  VWAP cases and three historical turnover-scope contracts, plus existing
+  corporate-action accounting/causal OPEN fill-model limitations. No generic
+  tolerance, VWAP clamp, fake source precision or formal usability claim.
+- Actual default configuration inventoried: OPEN, initial cash 1,000,000,
+  unchanged selector/risk/cost settings. No formal configuration artifact yet.
+  OPEN currently uses a full-session limit flag; opening quantity/partial-fill
+  assumptions and dated account/cost handling need an explicit model contract.
+  This is not evidence that every execution mode must pass simultaneously.
+- Hardened the existing formal runner: read-only input inspection; require
+  snapshot/config/code hashes and eligible full-market/config/model evidence.
+  Revalidate before publishing output. An old generic passing audit or manual
+  Boolean cannot authorize this run. No formal binding has been issued.
+- Added readiness to the existing CLI/report writer: real invocation produced
+  DATA_NOT_READY, no selector/broker call, append-only inspection records, local
+  HTML. It is a prerequisite view, **not** the finished operational daily-candidate
+  system. Automatic browser preview was security-blocked; visual QA uncompleted.
+- Added backup-only mode to the existing snapshot tool. Outside-repo SQLite
+  online backup verified identical SHA256 and integrity `ok`; 551 evidence
+  files (100,208,766 bytes) copied and hash checked. These are local backups,
+  not offsite backup or a migrated full-market database.
+- Tests: **17 new focused tests pass; full suite 150 passed**. Actual candidate
+  checks/replay are separate; scoped preaudit ran and failure report was retained.
+  Python 3.12.14, dependency check clean. No real returns/orders were generated.
+- Existing sync task/guardian retained. At inspection guardian 12120 was in
+  retry_wait, no active worker; refresh timestamps are not successful requests.
+  No duplicate scheduler and no newly created background repair job.
+- Reports/precise source requirements locally under
+  `outputs/phase4_pilot_final/20261019/`. [Operations/recovery](docs/OPERATIONS.md)
+  distinguishes executed commands from gated future commands. Awaiting the
+  concrete source/model dependencies; no 20/100/919 expansion or real baseline.
 
 ## Three-security remaining-evidence pilot review (2026-10-18)
 

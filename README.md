@@ -6,6 +6,11 @@ risk sizing, paper execution, and post-signal tracking.
 > This is a research and simulation tool, not investment advice or a live
 > brokerage connection.
 
+Current master execution checkpoint: [plan](docs/MASTER_EXECUTION_PLAN.md),
+[Phase 4 status](PHASE4_STATUS.md), and [tested readiness/backup/recovery entry](docs/OPERATIONS.md).
+The three-stock candidate is still gated; the local readiness page is **not** a
+completed daily selection service or proof of full-market/backtest admission.
+
 ## Current capabilities
 
 ### Phase 1 — one stock per day
