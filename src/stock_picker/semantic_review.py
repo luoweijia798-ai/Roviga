@@ -1289,6 +1289,67 @@ REPAIR_KEYS={'bars':('trading_date','symbol'),'session_evidence':('symbol','trad
              'provider_quarantine':('symbol','trading_date','source'),'metadata':('key',)}
 
 
+def reconstruct_reference_factors(events: list[dict], rule: dict) -> list[dict]:
+    """Independent scoped input version of the SAME reference-price formula.
+
+    Exact decimal ratios are accumulated as rational numbers, not rounded
+    provider cumulative values. This is NOT an inferred equity entitlement or
+    permission to replace a baseline. Caller verifies original source hashes,
+    reference-price evidence and completeness before applying a candidate patch.
+    A past announcement supports reconstruction, never a historical download claim.
+    """
+    import hashlib
+    from decimal import Decimal, localcontext
+    from fractions import Fraction
+    symbol = rule['symbol']
+    if (symbol not in {'000033', '000034', '000035'}
+            or rule.get('formal_gate_eligible') is not False
+            or rule.get('factor_construction') != 'reference-step-product-v2'):
+        raise ValueError('explicit isolated reference-factor version required')
+    anchor = rule['anchor_date']; end = rule['end_date']
+    date.fromisoformat(anchor); date.fromisoformat(end)
+    if anchor > end:
+        raise ValueError('invalid frozen interval')
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    anchor_hash = hashlib.sha256(canonical({'symbol': symbol, 'anchor': anchor,
+                                           'scale': '1', 'rule': rule['version']}).encode()).hexdigest()
+    factors = [{'symbol': symbol, 'effective_date': anchor, 'cumulative_factor': '1',
+                'source_sha256': anchor_hash, 'captured_at': None,
+                'historical_available_at': None,
+                'verification_status': 'declared normalization constant, not a market observation',
+                'exact_numerator': '1', 'exact_denominator': '1'}]
+    cumulative = Fraction(1); seen = set()
+    for event in sorted(events, key=lambda e: e['effective_date']):
+        day = event['effective_date']; announced = event['announcement_date']
+        previous = event['previous_actual_date']
+        for value in (day, announced, previous): date.fromisoformat(value)
+        if (event['symbol'] != symbol or not anchor < day <= end or day in seen
+                or not anchor <= previous < day or not announced < day):
+            raise ValueError('event identity/date/announcement conflict')
+        seen.add(day)
+        if not event.get('source_sha256') or not event.get('reference_evidence_sha256'):
+            raise ValueError('event and reference evidence both required')
+        values = []
+        for key in ('previous_actual_close', 'reference_preclose'):
+            if not isinstance(event[key], str):
+                raise ValueError('reference inputs must be original decimal strings')
+            number = Decimal(event[key])
+            if not number.is_finite() or number <= 0:
+                raise ValueError('invalid reference input')
+            values.append(Fraction(number))
+        cumulative *= values[0] / values[1]
+        with localcontext() as context:
+            context.prec = 80
+            value = str(Decimal(cumulative.numerator) / Decimal(cumulative.denominator))
+        factors.append({'symbol': symbol, 'effective_date': day, 'cumulative_factor': value,
+            'exact_numerator': str(cumulative.numerator), 'exact_denominator': str(cumulative.denominator),
+            'source_sha256': hashlib.sha256(canonical(event).encode()).hexdigest(),
+            'captured_at': event.get('captured_at'), 'historical_available_at': None,
+            'verification_status': 'reconstructed from dated announcement and verified reference; not contemporaneously archived',
+            'event_inputs': dict(event)})
+    return factors
+
+
 def derive_scoped_signal_prices(rows: list[dict], factors: list[dict], rule: dict) -> list[dict]:
     """Pure three-security experiment, not a market-wide adjustment migration.
 
