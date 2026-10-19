@@ -162,6 +162,80 @@ def _status_payload(status: Any | None) -> dict[str, Any] | None:
     }
 
 
+def daily_update_check(cache_path: Path, session_date: date, *, calendar_evidence: Path | None = None, now=None) -> dict:
+    """Read a single database transaction; inventory freshness is not admission.
+
+    No synchronizer, selector, audit or broker. Missing rows are not inferred
+    suspensions. The inventory is not certified historical pool membership.
+    """
+    import hashlib
+    import sqlite3
+    from datetime import timedelta
+    from .phase4_acceptance import SnapshotCache
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        raise ValueError('update-check timestamp must be timezone-aware')
+    local = instant.astimezone(timezone(timedelta(hours=8)))
+    result = {'kind':'daily_update_check','observed_at':local.isoformat(),
+        'requested_session':session_date.isoformat(),'calendar_status':'UNKNOWN',
+        'timing':'FUTURE_DATE' if session_date > local.date() else
+                 'BEFORE_REGULAR_CLOSE' if session_date == local.date() and local.hour < 15 else
+                 'AFTER_REGULAR_CLOSE',
+        'status':'DATA_NOT_READY','strategy_evaluated':False,'orders_run':False,
+        'inventory_is_not_point_in_time_admission':True,
+        'last_successful_request_at':None,'last_successful_write_at':None,
+        'success_time_limitation':'existing status timestamps are not request/write event timestamps',
+        'errors':[]}
+    try:
+        if calendar_evidence is not None:
+            raw = calendar_evidence.read_bytes()
+            evidence = json.loads(raw)['calendar']
+            sessions = {date.fromisoformat(item) for item in evidence['dates']}
+            verified = date.fromisoformat(evidence['verified_through'])
+            if not sessions or verified > max(sessions) or not evidence['source'] or not evidence['url']:
+                raise ValueError('invalid calendar coverage evidence')
+            result['calendar_evidence'] = {'sha256':hashlib.sha256(raw).hexdigest(),
+                'source':evidence['source'],'url':evidence['url'],'verified_through':verified.isoformat()}
+            if min(sessions) <= session_date <= verified:
+                result['calendar_status'] = 'LISTED_SESSION' if session_date in sessions else 'NOT_LISTED_IN_COVERED_CALENDAR'
+        with SnapshotCache(Path(cache_path)).connect() as connection:
+            connection.execute('BEGIN')
+            revision = connection.execute("SELECT value FROM metadata WHERE key='data_revision'").fetchone()
+            rows = connection.execute('SELECT symbol,list_date,delist_date FROM stocks').fetchall()
+            requested = session_date.isoformat()
+            present = {r[0] for r in connection.execute('SELECT symbol FROM accepted_bars WHERE trading_date=?',(requested,))}
+            known_active, unknown, outside = set(), set(), set()
+            for row in rows:
+                if row['list_date'] is None:
+                    unknown.add(row['symbol'])
+                elif row['list_date'] > requested or (row['delist_date'] and row['delist_date'] < requested):
+                    outside.add(row['symbol'])
+                else:
+                    known_active.add(row['symbol'])
+            latest = connection.execute('SELECT MAX(trading_date) FROM bars').fetchone()[0]
+            statuses = connection.execute('SELECT symbol,status,synced_through,requested_end,updated_at FROM symbol_sync_status').fetchall()
+            counts = Counter(r['status'] for r in statuses)
+            inventory = {r['symbol'] for r in rows}
+            missing_status = inventory - {r['symbol'] for r in statuses}
+            pending_target = missing_status | {r['symbol'] for r in statuses
+                if r['symbol'] in inventory and (not r['requested_end'] or r['requested_end'] < requested
+                    or not r['synced_through'] or r['synced_through'] < requested)}
+            result.update(data_revision=revision[0] if revision else None,
+                latest_any_stored_date=latest,inventory_total=len(rows),
+                known_active_inventory=len(known_active),unknown_listing_inventory=len(unknown),
+                outside_inventory=len(outside),quote_symbols_on_requested_date=len(present),
+                known_active_with_quote=len(known_active & present),
+                known_active_without_quote=sorted(known_active-present),
+                no_quote_reason='UNKNOWN: absence alone is not suspension evidence',
+                sync_state_counts=dict(counts),sync_target_or_checkpoint_pending=len(pending_target),
+                inventory_without_sync_status=len(missing_status),
+                last_sync_status_update=max((r['updated_at'] for r in statuses),default=None),
+                inventory_reconciles=len(known_active)+len(unknown)+len(outside)==len(rows))
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+        result['errors'].append(str(error))
+    return result
+
+
 def pilot_readiness(identity_path: Path, admission_path: Path, *, requirements_path: Path | None = None, now=None) -> dict:
     """Read-only pilot prerequisite check, NOT the operational daily selector.
 

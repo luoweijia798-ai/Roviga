@@ -43,7 +43,7 @@ class PaperTradingWorkflow:
         market_prices: dict[str, float] | None = None,
         limit_up_locked: bool = False,
     ) -> CandidateExecution:
-        track = self.tracker.record_signal(
+        track = self.tracker.reserve_signal(
             selection,
             planned_entry_price=entry_price,
             stop_price=stop_price,
@@ -77,5 +77,5 @@ class PaperTradingWorkflow:
             market_price=entry_price,
             limit_up_locked=limit_up_locked,
         )
-        self.tracker.record_fill(selection.trading_date, trade)
+        track = self.tracker.record_fill(selection.trading_date, trade)
         return CandidateExecution(track, sizing, status, trade)

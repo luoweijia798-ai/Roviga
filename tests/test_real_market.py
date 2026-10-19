@@ -206,9 +206,12 @@ class _FakeTushare:
 
 
 class SQLiteCausalDataTests(unittest.TestCase):
-    def test_vwap_clamps_sub_tick_rounding_and_rejects_material_mismatch(self) -> None:
-        self.assertEqual(_bounded_vwap(12_073_481, 1_931_757, 6.25, 6.25), 6.25)
-        self.assertIsNone(_bounded_vwap(100_000, 10_000, 9.0, 9.5))
+    def test_vwap_never_clamps_or_hides_unverified_source_conflicts(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'raw VWAP outside daily range'):
+            _bounded_vwap(12_073_481, 1_931_757, 6.25, 6.25)
+        with self.assertRaisesRegex(ValueError, 'raw VWAP outside daily range'):
+            _bounded_vwap(100_000, 10_000, 9.0, 9.5)
+        self.assertEqual(_bounded_vwap(1000,100,9.,11.),10.)
 
     def test_round_trip_preserves_prices_limits_and_classification_time(self) -> None:
         with _test_directory() as directory:
@@ -261,6 +264,31 @@ class SQLiteCausalDataTests(unittest.TestCase):
 
 @unittest.skipIf(pd is None, "pandas is installed with the market-data extra")
 class AkShareAdapterTests(unittest.TestCase):
+    def test_sync_retains_vwap_conflict_without_clamping_or_blind_retry(self) -> None:
+        class ConflictSource(_FakeAkShare):
+            calls = 0
+            def stock_zh_a_hist(self, **kwargs):
+                self.calls += 1
+                frame = super().stock_zh_a_hist(**kwargs)
+                for field in ('开盘','最高','最低','收盘'):
+                    frame[field] = 10. if kwargs['adjust'] == '' else 11.
+                frame['成交额'] = 999999.999
+                return frame
+        with _test_directory() as directory:
+            cache = SQLiteMarketCache(Path(directory)/'synthetic.sqlite')
+            source = ConflictSource()
+            adapter = AkShareAdapter(ak_module=source,request_interval=0,retry_delay=0,
+                                     include_classifications=False)
+            adapter.sync(cache,PHASE4_START,END)
+            calls = source.calls
+            status = cache.sync_statuses()[0]
+            self.assertEqual(status.status,'failed')
+            self.assertIn('2015-06-01: raw VWAP outside daily range',status.last_error)
+            self.assertEqual(cache.symbol_bar_count('000001'),0)
+            adapter.sync(cache,PHASE4_START,END)
+            self.assertEqual(source.calls,calls)
+            self.assertEqual(cache.sync_statuses()[0].status,'failed')
+
     def test_empty_adjusted_history_falls_back_to_raw_signal_prices(self) -> None:
         with _test_directory() as directory:
             cache = SQLiteMarketCache(Path(directory) / "market.sqlite")

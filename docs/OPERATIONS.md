@@ -4,9 +4,52 @@ Current state: pilot C blocked, formal gate closed. This document does not claim
 the full daily paper-observation edition is finished. No real broker or funds.
 Run from the Roviga repository; preserve all existing data and user changes.
 
-Latest user choice, 2026-10-19: **keep the execution model unchanged; deliver
-data and the not-ready interface only**. This is not an approved final OPEN
-contract. No automatic migration expansion, 919 resume or real return run.
+Latest continuation after bd1308e: **keep the execution model unchanged**;
+continue independent engineering and conditional later stages only once actual
+gates pass. This is not an approved final OPEN contract. Current evidence/model
+gates still prohibit migration expansion, 919 migration or real return runs.
+
+## New verified recovery/update entry points
+
+Run from this repository with `PYTHONPATH=src`. The read-only update check was
+actually run on the live database without a sync or strategy invocation:
+
+```powershell
+$env:PYTHONPATH = 'src'
+$env:PYTHONIOENCODING = 'utf-8'
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation update-check --cache data/a_share_201506_present.sqlite --end 2026-10-16 --calendar-evidence outputs/phase4_acceptance/20261012T090452083792Z/source_review.json --report outputs/phase4_followthrough/20261019
+```
+
+Each result is a separate timestamped record, not a new audit or readiness page.
+At 17:32 local: DATA_NOT_READY, revision 104806, latest date 2026-10-16,
+5,838 complete / 72 failed, 5,495 requested-day quotes / 5,577 known-active
+inventory. Calendar coverage is not historical pool certification; missing
+quotes remain unexplained. Source-success timestamps are explicitly unknown.
+
+`SQLiteDailyTracker` extends the existing tracker with a **separate** journal,
+context binding (`kind`, `data_version`, `configuration_id`), transactional
+append/replay, hash-chain checks and repeat protection. It never initializes
+an existing market database. Only synthetic test journals have been created.
+The following read-only command was subprocess-tested on a synthetic journal;
+the placeholder is not an existing operational file:
+
+```powershell
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation tracking-history --tracking-ledger <existing-separate-tracking-journal.sqlite>
+```
+
+Missing/corrupt journals fail closed; do not create an empty replacement to
+pretend history was restored. Reopen the original with the same context after
+preserving it. The workflow reserves a candidate before any order attempt, so
+a repeated submission after interruption is rejected and requires reconciliation.
+This is not atomic broker/account/risk recovery: do not automatically retry an
+uncertain order, infer cash/positions from this journal, or treat hash checks as
+proof against intentional tampering or deletion of the entire suffix.
+No live/prospective simulation is enabled by these tools. Formal gates remain.
+
+Latest validation: **23 targeted / 181 full-suite tests passed**; candidate
+revision-6 hash unchanged. The strict VWAP ingestion change preserves new source
+conflicts instead of clamping. Source precision/scope is not established by
+passing synthetic tests; see `PHASE4_TURNOVER_DEPENDENCIES.md`.
 
 ## Tested now: readiness, not selection
 
@@ -100,19 +143,22 @@ Do not pass an arbitrary `--snapshot` path without its exact matching
 
 ## Existing continuous sync: do not duplicate it
 
-Inspected `RovigaPhase4Sync` task and guardian PID 12120. It remained in
-`retry_wait`, with no worker at inspection, target 2026-10-02. The status file
-contained 5,910 total, 5,900 complete and 10 failed, but this is the live sync
-inventory, **not the 919 repair cohort or audited full-market completeness**.
-Maximum stored date 2026-10-12 does not prove per-security October completeness.
-Report refresh is not a recent successful request/write/progression.
+Retained `RovigaPhase4Sync` and guardian PID 12120. The single worker consumed
+the existing local split plan with incremental target 2026-10-16 (old target
+2026-10-12 preserved under followthrough outputs). It wrote 21,972 rows in that
+run; later retry wrote zero and retained 72 failures. This is live sync inventory,
+**not the 919 repair cohort or audited full-market completeness**. The guardian
+process's already-loaded monitor still labels its legacy target 2026-10-02;
+read the split plan, worker log and explicit-date update check together. Do not
+stop/restart it merely to fix that label or start a second worker. No successful
+request/write timestamp is inferred from report refresh.
 
 Read `logs/phase4_guardian_state.json`, `phase4_sync_status.json`, existing task
 state and actual success records before restarting. Existing CLI supports
 `--cache`, `--end`, `--monitor-seconds`, `--retry-seconds`; `--help` was checked.
-No new schedule was installed or enabled. An updated October target requires
-coordination with the single existing worker; keep it separate from historical
-candidate acceptance. This conversation did not start a background pilot job.
+No new schedule was installed or enabled. October updates stay separate from
+historical candidate acceptance. This conversation did not start a background
+pilot job; deferred source conflicts require new evidence, not blind retries.
 
 ## Formal baseline: command exists, currently ineligible
 
@@ -161,6 +207,6 @@ first returns. Do not silently switch modes or invent parameters.
 
 Open-source exports/permissions still required are itemized locally in
 `outputs/phase4_pilot_final/20261019/data_requirements.json`. No password or Token
-in chat; no purchased-service availability guarantee. The model decision is now
-recorded: keep it unchanged and limit delivery to data/readiness. Evidence and
-model limitations remain, so the correct visible state stays DATA_NOT_READY.
+in chat; no purchased-service availability guarantee. Keep the model unchanged;
+conditional continuation does not waive evidence or model limitations. The
+correct visible state remains DATA_NOT_READY.

@@ -25,14 +25,15 @@ def eligible(cache, stock, start, end, now=None) -> bool:
 
 
 def failed(cache, stock, start, end, error, now=None) -> None:
-    if stock.exchange != "BSE" and "archived trading after documented delisting" not in str(error):
+    persistent = ("archived trading after documented delisting" in str(error)
+                  or "raw VWAP outside daily range:" in str(error))
+    if stock.exchange != "BSE" and not persistent:
         return
     now = now or datetime.now(timezone.utc)
     key = fingerprint(stock, start, end)
     with cache.connect() as c:
         previous = c.execute("SELECT * FROM sync_retry_policy WHERE symbol=?", (stock.symbol,)).fetchone()
         count = previous["consecutive_failures"] + 1 if previous and previous["fingerprint"] == key else 1
-        persistent = "archived trading after documented delisting" in str(error)
         disposition = "source_review_required" if persistent or count >= 3 else "cooldown"
         next_retry = now + timedelta(hours=min(6, 2 ** (count - 1)))
         c.execute("INSERT OR REPLACE INTO sync_retry_policy VALUES (?,?,?,?,?,?,?)",

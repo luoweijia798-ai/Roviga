@@ -207,7 +207,7 @@ def main() -> None:
         description="Phase 4 real A-share data sync and foundation backtest"
     )
     parser.add_argument(
-        "command", choices=("sync", "status", "monitor", "audit", "backtest", "readiness")
+        "command", choices=("sync", "status", "monitor", "audit", "backtest", "readiness", "update-check", "tracking-history")
     )
     parser.add_argument("--provider", choices=("akshare", "tushare"), default="akshare")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
@@ -221,6 +221,10 @@ def main() -> None:
                         help="existing layered pilot admission JSON for readiness display")
     parser.add_argument("--data-requirements", type=Path,
                         help="existing snapshot-bound missing-evidence list; readiness display only")
+    parser.add_argument("--calendar-evidence", type=Path,
+                        help="existing source-review calendar evidence for read-only update-check")
+    parser.add_argument("--tracking-ledger", type=Path,
+                        help="separate existing tracking journal; tracking-history never creates one")
     parser.add_argument("--formal-binding", type=Path,
                         help="verified full-market snapshot/config/code binding; never a pilot report")
     parser.add_argument("--symbol-limit", type=int)
@@ -235,6 +239,26 @@ def main() -> None:
     parser.add_argument("--sync-plan", type=Path,
                         help="optional local split historical-acceptance/incremental plan")
     args = parser.parse_args()
+
+    if args.command == "tracking-history":
+        if args.tracking_ledger is None:
+            parser.error("tracking-history requires --tracking-ledger")
+        from .tracking import SQLiteDailyTracker
+        print(json.dumps(SQLiteDailyTracker(args.tracking_ledger,read_only=True).inspection(),
+                         ensure_ascii=False,indent=2))
+        return
+
+    if args.command == "update-check":
+        from datetime import datetime, timezone
+        from .sync_monitor import daily_update_check
+        payload = daily_update_check(args.cache,args.end,calendar_evidence=args.calendar_evidence)
+        args.report.mkdir(parents=True,exist_ok=True)
+        path = args.report / ('daily-update-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '.json')
+        with path.open('x',encoding='utf-8') as stream:
+            json.dump(payload,stream,ensure_ascii=False,indent=2)
+        print(json.dumps({k:v for k,v in payload.items() if k != 'known_active_without_quote'},ensure_ascii=False,indent=2))
+        print('saved=' + str(path.resolve()))
+        return
 
     if args.command == "readiness":
         if args.snapshot_identity is None or args.admission_report is None:

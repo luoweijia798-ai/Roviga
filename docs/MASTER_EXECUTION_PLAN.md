@@ -6,10 +6,20 @@ Old batch-end pauses/three-only/no-919 rules are superseded CONDITIONALLY.
 No real broker or funds. Do not treat completion of this plan as completion
 of its implementation.
 
-## Latest user decision: data and readiness delivery only
+## Latest continuation after bd1308e
+
+The user reinstated the conditional master mandate: resolve the actual remaining
+pilot dependencies; after genuine admission continue controlled migration,
+full-market admission and Phase 5A without batch approval. Do not change the
+execution model, selector/risk behavior or parameters. Independent observation,
+history/recovery and update checks continue now. The prior limited-delivery
+choice below is historical, not a current ban on all future eligible stages.
+No new plan or scheduler; reuse the stages and entry points already present.
+
+## Previous decision: data and readiness delivery only (superseded in scope)
 
 2026-10-19: the user explicitly chose “先保持模型不变，仅交付数据与未就绪界面”.
-This narrows the current execution scope. Keep the actual OPEN model unchanged;
+This narrowed the then-current execution scope. Keep the actual OPEN model unchanged;
 do not change fills, fees, strategy or risk behavior. No return backtest, 919
 resume or migration expansion is authorized by this continuation. The broader
 stages below remain a roadmap, not automatic current work. No model decision
@@ -135,8 +145,8 @@ applicable intervals. Existing KLC original decoder, Bao overlaps and official
 exchange definitions do not establish KLC publishing quantization/scope.
 Do not re-request the same prices expecting a contract to appear.
 
-The consolidated execution question has been answered: keep the model untouched
-and deliver data/readiness only. Do not request the same choice again or infer
+The consolidated execution question has been answered: keep the model untouched.
+The later continuation restores conditional wider work. Do not infer
 permission to switch mode or invent capacity/partial-fill parameters. Cash/share/
 payment entitlements across the 15 events and dated costs remain unresolved
 future execution prerequisites, outside the current repair authorization.
@@ -144,6 +154,20 @@ future execution prerequisites, outside the current repair authorization.
 Independent engineering above is completed to its stated boundary. The remaining
 operational candidate/fill/tracking paths depend on the unresolved source/model
 contract, not merely another batch/report. No formal run or background promise.
+
+### Followthrough after bd1308e
+
+Actual dependency trace distinguishes four raw VWAP anomalies from three formal
+SQLite reader blockers; the fourth is an unused warmup VWAP, not repaired data.
+Three turnover contracts remain required by volume filters/ranking. See
+`PHASE4_TURNOVER_DEPENDENCIES.md`; the existing A/B conclusions stand and C fails.
+Fixed silent adapter VWAP clamping and retained persistent source-review failures.
+Implemented separate tracker recovery/repeat protection and read-only history/
+daily update commands, not another page or a working daily trading service.
+23 targeted / 181 full tests pass. Live October plan advanced to 2026-10-16;
+existing worker wrote 21,972 rows and retained 72 failures. No candidate mutation,
+full-audit repetition, strategy changes or returns. Latest precise checkpoint
+and command limitations are in `PHASE4_STATUS.md` and `OPERATIONS.md`.
 
 ## Pause criteria
 

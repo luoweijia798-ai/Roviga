@@ -49,6 +49,10 @@ class DailyTracker:
     def __init__(self) -> None:
         self._tracks: dict[date, CandidateTrack] = {}
 
+    def reserve_signal(self, selection, **prices):
+        """Workflow reservation must reject an already submitted candidate."""
+        return self.record_signal(selection, **prices)
+
     def record_signal(
         self,
         selection: Selection,
@@ -139,3 +143,208 @@ class DailyTracker:
             track.state = TrackingState.TOOK_PROFIT
         elif track.fill is not None:
             track.state = TrackingState.ACTIVE
+
+
+class SQLiteDailyTracker(DailyTracker):
+    """Transactional event storage for the existing tracker, not a trading gate.
+
+    Replays exactly the existing tracking calculations; does not select stocks,
+    generate fills, repair prices or restore the broker/account/risk state.
+    A separate journal must never be the live market or candidate database.
+    """
+
+    def __init__(self, path, *, context=None, create=False, read_only=False):
+        import json
+        from pathlib import Path
+        super().__init__()
+        self.path = Path(path).resolve()
+        self.read_only = read_only
+        if not self.path.exists() and create:
+            if read_only or context is None:
+                raise ValueError('creating a journal requires context and write access')
+            self._validate_context(context)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Exclusive creation: never initialize tables in an existing market DB.
+            with self.path.open('xb'):
+                pass
+            with self._connection(write=True) as connection:
+                connection.execute('CREATE TABLE tracking_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+                connection.execute('CREATE TABLE tracking_events('
+                    'seq INTEGER PRIMARY KEY, event_key TEXT UNIQUE NOT NULL, '
+                    'payload TEXT NOT NULL, digest TEXT NOT NULL)')
+                connection.execute('INSERT INTO tracking_meta VALUES(?,?)',
+                                   ('schema','roviga-tracking-events-v1'))
+                connection.execute('INSERT INTO tracking_meta VALUES(?,?)',
+                                   ('context',self._encode(context)))
+        with self._connection() as connection:
+            schema = connection.execute("SELECT value FROM tracking_meta WHERE key='schema'").fetchone()
+            if schema is None or schema[0] != 'roviga-tracking-events-v1':
+                raise ValueError('unsupported tracking journal')
+            row = connection.execute("SELECT value FROM tracking_meta WHERE key='context'").fetchone()
+            if row is None:
+                raise ValueError('missing tracking context')
+            self.context = json.loads(row[0])
+            self._validate_context(self.context)
+            if context is not None and self._encode(context) != self._encode(self.context):
+                raise ValueError('tracking data/configuration/provenance changed; use a new journal')
+            tracker, _, _ = self._replay(connection)
+            self._tracks = tracker._tracks
+
+    @staticmethod
+    def _validate_context(context):
+        if (not isinstance(context, dict)
+                or set(context) != {'kind','data_version','configuration_id'}
+                or context['kind'] not in {'synthetic_test','historical_replay','prospective_paper'}
+                or any(not isinstance(value,str) or not value.strip() for value in context.values())):
+            raise ValueError('explicit provenance, data version and configuration identity required')
+
+    def _connection(self, *, write=False):
+        import sqlite3
+        from contextlib import contextmanager
+
+        @contextmanager
+        def opened():
+            if write and self.read_only:
+                raise ValueError('tracking journal opened read-only')
+            connection = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'),
+                                         uri=True, timeout=10)
+            try:
+                # One consistent view, including replay and append by concurrent callers.
+                connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+        return opened()
+
+    @staticmethod
+    def _encode(value):
+        import json
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',',':'), allow_nan=False)
+
+    @staticmethod
+    def _apply(tracker, event):
+        from .trading import Trade
+        action = event['action']
+        signal_date = date.fromisoformat(event['signal_date'])
+        values = dict(event['values'])
+        if action == 'signal':
+            signal = dict(values.pop('selection'))
+            signal['trading_date'] = date.fromisoformat(signal['trading_date'])
+            if signal['trading_date'] != signal_date:
+                raise ValueError('signal date mismatch')
+            return tracker.record_signal(Selection(**signal), **values)
+        if action == 'fill':
+            values['trading_date'] = date.fromisoformat(values['trading_date'])
+            values['side'] = Side(values['side'])
+            return tracker.record_fill(signal_date, Trade(**values))
+        if action == 'market':
+            values['trading_date'] = date.fromisoformat(values['trading_date'])
+            return tracker.update_market(signal_date, **values)
+        raise ValueError('unknown tracking event')
+
+    @staticmethod
+    def _event_key(event):
+        key = event['action'] + ':' + event['signal_date']
+        if event['action'] == 'market':
+            key += ':' + event['values']['trading_date']
+        return key
+
+    def _replay(self, connection):
+        import hashlib
+        import json
+        tracker = DailyTracker()
+        stored_context = connection.execute("SELECT value FROM tracking_meta WHERE key='context'").fetchone()
+        if stored_context is None or stored_context[0] != self._encode(self.context):
+            raise ValueError('tracking context changed during use')
+        previous = hashlib.sha256(self._encode(self.context).encode('utf-8')).hexdigest()
+        count = 0
+        for seq, key, payload, digest in connection.execute(
+                'SELECT seq,event_key,payload,digest FROM tracking_events ORDER BY seq'):
+            if seq != count + 1:
+                raise ValueError('non-contiguous tracking history')
+            expected = hashlib.sha256((previous + '\n' + payload).encode('utf-8')).hexdigest()
+            event = json.loads(payload)
+            from datetime import datetime
+            if datetime.fromisoformat(event['recorded_at']).tzinfo is None:
+                raise ValueError('event acquisition time must be timezone-aware')
+            if digest != expected or key != self._event_key(event):
+                raise ValueError('tracking history integrity mismatch')
+            self._apply(tracker,event)
+            previous = digest
+            count += 1
+        return tracker, count, previous
+
+    def _append(self, event, *, require_new=False):
+        import copy
+        import hashlib
+        import json
+        from datetime import datetime, timezone
+        payload = self._encode(event)
+        key = self._event_key(event)
+        with self._connection(write=True) as connection:
+            # Never trust an in-memory copy after restart or another writer.
+            tracker, count, previous = self._replay(connection)
+            existing = connection.execute('SELECT payload FROM tracking_events WHERE event_key=?',(key,)).fetchone()
+            if existing is not None:
+                if require_new:
+                    raise ValueError('candidate already submitted; reconcile existing history before retry')
+                original = json.loads(existing[0])
+                original.pop('recorded_at')
+                if self._encode(original) != payload:
+                    raise ValueError('conflicting repeat; original tracking event retained')
+                result = tracker.get(date.fromisoformat(event['signal_date']))
+            else:
+                result = self._apply(tracker,event)
+                payload = self._encode({**event,'recorded_at':datetime.now(timezone.utc).isoformat()})
+                digest = hashlib.sha256((previous + '\n' + payload).encode('utf-8')).hexdigest()
+                connection.execute('INSERT INTO tracking_events VALUES(?,?,?,?)',
+                                   (count+1,key,payload,digest))
+        self._tracks = tracker._tracks
+        return copy.deepcopy(result)
+
+    def record_signal(self, selection, *, planned_entry_price, stop_price, take_profit_price, require_new=False):
+        from dataclasses import asdict
+        signal = asdict(selection)
+        signal['trading_date'] = selection.trading_date.isoformat()
+        return self._append({'action':'signal','signal_date':selection.trading_date.isoformat(),
+            'values':{'selection':signal,'planned_entry_price':planned_entry_price,
+                      'stop_price':stop_price,'take_profit_price':take_profit_price}},require_new=require_new)
+
+    def reserve_signal(self, selection, **prices):
+        return self.record_signal(selection, **prices, require_new=True)
+
+    def record_fill(self, signal_date, trade):
+        from dataclasses import asdict
+        values = asdict(trade)
+        values.update(trading_date=trade.trading_date.isoformat(),side=trade.side.value)
+        return self._append({'action':'fill','signal_date':signal_date.isoformat(),'values':values})
+
+    def update_market(self, signal_date, *, trading_date, close, high=None, low=None):
+        return self._append({'action':'market','signal_date':signal_date.isoformat(),
+            'values':{'trading_date':trading_date.isoformat(),'close':close,'high':high,'low':low}})
+
+    def get(self, signal_date):
+        with self._connection() as connection:
+            tracker, _, _ = self._replay(connection)
+        return tracker.get(signal_date)
+
+    def all(self):
+        with self._connection() as connection:
+            tracker, _, _ = self._replay(connection)
+        return tracker.all()
+
+    def inspection(self):
+        """Counts/identities only; does not run a selector or publish returns."""
+        with self._connection() as connection:
+            tracker, count, digest = self._replay(connection)
+        tracks = tracker.all()
+        return {'schema':'roviga-tracking-inspection-v1','context':self.context,
+                'event_count':count,'chain_head':digest,'candidate_count':len(tracks),
+                'signal_dates':[t.signal.trading_date.isoformat() for t in tracks],
+                'fill_count':sum(t.fill is not None for t in tracks),
+                'price_observation_count':sum(len(t.observations) for t in tracks),
+                'not_an_admission_or_account_restore':True}

@@ -2,6 +2,65 @@
 
 Checkpoint date: 2026-10-19
 
+## Continued execution after bd1308e: dependencies, ingestion and recovery
+
+- Actual starting HEAD `bd1308e79fbff45e6e53ce5cd032204bfd89aea2`; preserved
+  candidate revision 6 and its unchanged full SHA256
+  `82ea94b71c49c70c1ab47f944f8613506cf9c0923b70d50bd55b595d449b382a`.
+  Latest continuation restores conditional master-task progression, not model
+  changes. Older limited-delivery wording below is a historical checkpoint.
+- Inspected existing readiness, item list and actual SQL consumers. Four raw
+  VWAP anomalies remain; **three** reject formal SQLite bar reads. 000033's
+  2015-04-29 warmup row contributes only its prior signal price in that path;
+  its volume/amount/VWAP do not participate. Real read-only 2017-05-24 trace
+  confirmed this; direct/eager HistoricalBar loaders still reject that row.
+  No raw anomaly was repaired or removed. Three scope intervals contain 4,857
+  unique quote rows, including 4,854 formal volume-dependent rows, not 4,861.
+  See `docs/PHASE4_TURNOVER_DEPENDENCIES.md` for exact dates and limitations.
+- Source documentation confirms SDK units, not historical publisher rounding
+  or auction/block-trade scope. No invented tolerance, precision contract or
+  rounding rule. A/B conclusions stand; C remains blocked for all three.
+  No migration, full-market admission or Phase 5A is authorized by these results.
+- Fixed the existing adapter's silent VWAP clamp/None substitution. Decimal
+  raw ratios outside OHLC now retain an explicit dated source conflict, using
+  the existing persistent review state rather than infinite network retries.
+  Existing live rows were not retrospectively rewritten or certified.
+- Extended the existing tracker with a separate transactional event journal:
+  restart/replay, idempotent repeats, conflicting-repeat rejection, provenance
+  binding and pre-order reservation. Existing calculations unchanged. No real
+  prospective journal or simulated order created. Account/risk restoration and
+  cross-store reconciliation are NOT supplied by a tracking journal alone.
+- Added read-only `tracking-history` and `update-check` to the existing CLI.
+  Checks separate calendar/timing, inventory coverage and sync checkpoints;
+  absent quotes are not automatically suspensions. No new status page/scheduler.
+  Success request/write timestamps remain unknown when not captured by source
+  records; monitoring timestamps cannot stand in for them.
+- Existing guardian 12120 retained. Local split plan advanced only October's
+  target from 2026-10-12 to **2026-10-16**, with prior plan saved. Worker log
+  confirms **21,972 rows written** during that incremental run. At 17:32 local,
+  live revision 104806: 5,910 inventory, **5,838 complete / 72 failed**, latest
+  stored date 2026-10-16; 5,495 quotes of 5,577 currently active inventory names
+  on that date. Missing 82 are not inferred halts. Of 72 failures, 11 are explicit
+  raw-VWAP conflicts and 61 other retained failures. Relative to the earlier
+  5,900/10 checkpoint, completion -62/failures +62 accompanies a later target
+  and stricter evidence preservation, not deletion of old data. This live
+  inventory is not the pilot/919 cohort or audited historical coverage.
+- Guardian retains a legacy 2026-10-02 monitor label in its already loaded
+  process; worker uses the local split plan. Use explicit-target update-check
+  and worker log, not that stale label, for October progress. Last completed
+  retry wrote zero rows; failures remain deferred for source review. Process
+  existence is not continuous download progress. No process was stopped.
+- Verification: **23 targeted tests / 181 full-suite tests passed**. Synthetic
+  fixtures are not real returns. Candidate hash rechecked unchanged; no duplicate
+  full preaudit on unchanged candidate/evidence. Selector/risk/trading/backtest
+  core files unchanged. Runtime evidence is ignored under
+  `outputs/phase4_followthrough/20261019/`, never uploaded to Git.
+- Next affected-path work requires the exact publisher precision/scope evidence
+  listed in the dependency document and a separately authorized causal fill/
+  account contract. Do not retry identical source requests or silently change
+  OPEN to bypass these requirements. Independent recovery tools are implemented
+  to the boundaries above, not advertised as an operational daily trading service.
+
 ## User-selected limited delivery / readiness evidence display (2026-10-19)
 
 - Continued from clean `cc477b04fbe01c72dce165d7e454d8039b98b4e7`.

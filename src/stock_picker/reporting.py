@@ -86,8 +86,8 @@ def write_pilot_readiness(payload: dict, output_directory: str | Path) -> Path:
 <h1>Roviga · 数据准备状态</h1><small>本地只读验收视图 · 不接券商 · 不使用真实资金</small>
 <section class="note"><div class="state">数据未就绪，未选股</div><p>{esc(payload['reason'])}</p>
 <p>这不是“无合格标的”，也不是风控主动空仓。风险计算尚未运行。</p></section>
-<section><h2>本次交付范围</h2><p>按已确认选择：保持现有成交模型不变，仅交付数据与未就绪界面。</p>
-<p>不生成候选或收益，不恢复 919 队列，不自动扩大迁移。模型限制保留，不视为已解决；正式回测门禁仍关闭。</p></section>
+<section><h2>本页面范围</h2><p>保持现有成交模型不变；本页面仅展示数据与未就绪状态，不代表整个总任务的授权范围。</p>
+<p>本页面不生成候选或收益，不恢复 919 队列，不自动扩大迁移。模型限制保留，不视为已解决；正式回测门禁仍关闭。</p></section>
 <section><h2>本次核对</h2><p>检查时间：{esc(payload['observed_at'])}（Asia/Shanghai）</p>
 <p>候选数据最新日期：{esc(payload.get('data_latest_date') or '未验证')}；行情条数：{esc(payload.get('quote_rows', '未验证'))}；证券数：{esc(payload.get('security_count', '未验证'))}</p>
 <p>快照：{esc(payload.get('snapshot_id', '未验证'))}</p>
@@ -102,7 +102,7 @@ def write_pilot_readiness(payload: dict, output_directory: str | Path) -> Path:
 <section><h2>最近 20 条准备状态检查</h2><p>不是 20 个交易日的前瞻观察；没有历史收益或模拟成交结果。</p>
 <p>最近记录读取失败或格式不符：{history_errors} 条。原文件保留，未补造记录。</p>
 <table><tr><th>检查时间</th><th>状态</th><th>快照</th></tr>{''.join(recent)}</table></section>
-<section><h2>后续条件</h2><p>当前交付止于数据与未就绪界面。新证据取得后可以按原规则核验，但不会因此自动改动成交模型或启动回测。</p></section></html>'''
+<section><h2>后续条件</h2><p>本页面不控制总任务推进。新证据按原规则核验；只有实际满足相应准入条件，才继续下一阶段。此页面不能改动成交模型或授权回测。</p></section></html>'''
     temporary = output / ('index-' + uuid.uuid4().hex + '.tmp')
     temporary.write_text(page, encoding='utf-8')
     temporary.replace(output / 'index.html')

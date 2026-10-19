@@ -1,10 +1,11 @@
 # Roviga execution constraints
 
 Read `docs/MASTER_EXECUTION_PLAN.md` and `PHASE4_STATUS.md` before work.
-Latest user decision (2026-10-19): keep the execution model unchanged; deliver
-data and the not-ready interface only. This limits the master mandate below:
-no automatic migration expansion, 919 resume, return backtest or model changes.
-Model limitations remain open, not waived by this delivery-scope decision.
+Latest user continuation after bd1308e reinstates the conditional master mandate:
+finish pilot evidence, then eligible controlled migrations/full-market admission/
+Phase 5A without batch-by-batch approval. Keep the execution model unchanged;
+actual data and model prerequisites still apply. Continue independent observation,
+history, update-check and recovery engineering; do not rebuild the readiness UI.
 The user's 2026-10-19 master mandate supersedes earlier batch-end stop rules.
 Continue to the next eligible step, not merely the next report or commit.
 

@@ -10,8 +10,10 @@ Current master execution checkpoint: [plan](docs/MASTER_EXECUTION_PLAN.md),
 [Phase 4 status](PHASE4_STATUS.md), and [tested readiness/backup/recovery entry](docs/OPERATIONS.md).
 The three-stock candidate is still gated; the local readiness page is **not** a
 completed daily selection service or proof of full-market/backtest admission.
-Latest user-selected scope (2026-10-19): keep the execution model unchanged;
-deliver data and the not-ready interface only. No automatic migration or returns.
+Latest continuation after bd1308e: keep the execution model unchanged; continue
+independent recovery/update engineering now, and conditional later stages only
+after their real gates pass. Current pilot and model gates remain closed.
+See [actual turnover dependencies](docs/PHASE4_TURNOVER_DEPENDENCIES.md).
 
 ## Current capabilities
 
@@ -42,6 +44,9 @@ The original phase-one selector in `selector.py` is unchanged in phases 2 and 3.
   returns, maximum gain/loss, and stop-loss/take-profit state.
 - `PaperTradingWorkflow` connects an existing phase-one `Selection` to sizing,
   execution, and tracking without changing selection logic.
+- Optional separate SQLite tracking journal: restart/replay, conflicting-repeat
+  rejection and pre-order candidate reservation. This is not complete account/
+  risk restoration or approval to run prospective paper observations.
 
 ### Phase 3 — causal historical backtesting
 

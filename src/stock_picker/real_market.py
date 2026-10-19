@@ -1179,6 +1179,10 @@ class AkShareAdapter:
             )
             signal = adjusted_row if adjusted_row is not None else row
             signal_frame = adjusted if adjusted_row is not None else raw
+            try:
+                raw_vwap = _bounded_vwap(amount, volume, low, high)
+            except ValueError as error:
+                raise ValueError(f'{stock.symbol} {trading_date}: {error}') from error
             bars.append(
                 HistoricalBar(
                     trading_date=trading_date,
@@ -1188,7 +1192,7 @@ class AkShareAdapter:
                     low=low,
                     close=close,
                     volume=volume,
-                    vwap=_bounded_vwap(amount, volume, low, high),
+                    vwap=raw_vwap,
                     tradable=volume > 0,
                     limit_up_locked=locked_up,
                     limit_down_locked=locked_down,
@@ -1683,17 +1687,19 @@ def _same_price(*values: float) -> bool:
 def _bounded_vwap(
     amount: float, volume: int, low: float, high: float
 ) -> float | None:
-    """Normalize only sub-tick provider rounding; reject material mismatches."""
+    """Validate raw turnover ratio without guessing publisher rounding.
+
+    Legacy function name retained. Neither clamp small conflicts to OHLC nor
+    hide larger conflicts as None; source scope/precision needs real evidence.
+    """
 
     if amount <= 0 or volume <= 0:
         return None
-    value = amount / volume
-    half_tick = 0.005
-    if value < low:
-        return low if low - value < half_tick else None
-    if value > high:
-        return high if value - high < half_tick else None
-    return value
+    value = Decimal(str(amount)) / Decimal(volume)
+    if not Decimal(str(low)) <= value <= Decimal(str(high)):
+        raise ValueError(f'raw VWAP outside daily range: amount={amount}, volume={volume}, '
+                         f'ratio={value}, low={low}, high={high}; source precision/scope evidence required')
+    return float(value)
 
 
 def _exchange_for_symbol(symbol: str) -> str:
