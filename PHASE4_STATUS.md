@@ -46,7 +46,15 @@ Checkpoint date: 2026-11-02
   verify changed identity/source or resolved evidence can reopen review.
   Preserved the old ignored local plan and advanced only the October incremental
   target from 2026-10-16 to **2026-10-30**. The guardian remains running;
-  actual new download progress must be established from its next worker log.
+  actual worker PID 23808 read that target at 15:38 local. At 15:40:53,
+  read-only live snapshot showed **330 newly written real daily bars** for
+  10/19..10/30, 33 per listed session, current symbol 000056. All 71 old
+  failures retained their old 10/16 requested end and attempt counts; both
+  benchmarks still ended at 10/16. This is partial progress, not daily/full-
+  market completion or audit approval. The local plan was then advanced to
+  today's verified 2026-11-02 session for the **next** existing worker run;
+  a copy of the 10/30 plan was preserved. The running worker still targets
+  10/30, and no second process was started.
 
 ## Continued execution after bd1308e: dependencies, ingestion and recovery
 

@@ -202,7 +202,14 @@ incremental end was advanced to the verified session 2026-10-30 only after
 real-ledger read-only validation showed all 71 persistent failures remain
 deferred under an end-date extension. The existing guardian will read that local
 plan on its next worker; a plan edit alone is not successful download proof.
-Source conflicts require new evidence, not blind retries.
+Worker PID 23808 did read the 10/30 plan and by 15:40:53 had written 330 new
+real daily bars across the 10/19..10/30 listed sessions. All 71 old review
+records remained unchanged. The plan was subsequently moved to the verified
+11/02 session for a later single-worker pass, with the intermediate 10/30
+plan copied under the same ignored followthrough directory. The current worker
+continues its 10/30 run; do not infer completed benchmark or market coverage
+from a maximum stored date. Source conflicts require new evidence, not blind
+retries.
 
 ## Formal baseline: command exists, currently ineligible
 
