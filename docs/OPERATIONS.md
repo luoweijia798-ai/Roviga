@@ -11,6 +11,41 @@ gates still prohibit migration expansion, 919 migration or real return runs.
 
 ## New verified recovery/update entry points
 
+### Daily observation prerequisite check
+
+The `observe` command combines the existing real SQLite data check, verified
+calendar evidence and three-stock pilot identity into one immutable inspection
+record. It returns one of `DATA_NOT_READY` or `NON_TRADING_DAY` under current
+gates. The same classifier distinguishes `RISK_BLOCKED`, `ACTIVE_CASH` and
+`ONE_CANDIDATE` only after a caller supplies actual full-market, account/risk
+and selection evidence; the current CLI does not claim or grant those gates.
+It never opens a brokerage connection or submits an order. It does not require
+or create a new status page.
+
+```powershell
+$env:PYTHONPATH = 'src'
+$env:PYTHONIOENCODING = 'utf-8'
+.\.venv\Scripts\python.exe -m stock_picker.phase4_foundation observe --cache data/a_share_201506_present.sqlite --end 2026-11-02 --calendar-evidence outputs/phase4_acceptance/20261012T090452083792Z/source_review.json --snapshot-identity outputs/phase4_pilot_final/20261019/final_reference_identity.json --admission-report outputs/phase4_pilot_final/20261019/pilot_admission.json --data-requirements outputs/phase4_pilot_final/20261019/data_requirements.json --report outputs/daily_observation/20261102
+```
+
+Actual real-data run at 2026-11-02 15:27 Asia/Shanghai: `DATA_NOT_READY`,
+revision 109676, inventory 5,914, latest stored quote 2026-10-16, zero quotes
+for 2026-11-02; no candidate, risk calculation, selector or simulated order.
+A separate real calendar check for Sunday 2026-11-01 returned `NON_TRADING_DAY`.
+These are two timestamped local inspection files, not a 20-session observation
+history. Rerunning creates another inspection; the separate tracking journal
+blocks a second candidate submission if one was ever legitimately made.
+After this change, 22 focused and 184 full-suite software tests passed. The
+current real database was used for the observation check, not for returns.
+
+To stop an observation, let this one-shot command exit; no daemon is started.
+To resume, verify the existing database, calendar evidence and exact candidate
+identity, then rerun for the desired date. Preserve all prior inspection files.
+For backup, use the existing `phase4_acceptance --backup-only` command below
+with a new destination outside Git; verify the resulting hash/integrity record
+and transfer the separate evidence files as described below. The existing sync
+guardian is a separate task and must be checked before any intervention.
+
 Run from this repository with `PYTHONPATH=src`. The read-only update check was
 actually run on the live database without a sync or strategy invocation:
 
@@ -158,7 +193,16 @@ state and actual success records before restarting. Existing CLI supports
 `--cache`, `--end`, `--monitor-seconds`, `--retry-seconds`; `--help` was checked.
 No new schedule was installed or enabled. October updates stay separate from
 historical candidate acceptance. This conversation did not start a background
-pilot job; deferred source conflicts require new evidence, not blind retries.
+pilot job. As of 2026-11-02, current live inventory is 5,914 securities:
+5,843 complete, 71 retained source-review failures (11 Shanghai/Shenzhen raw
+VWAP, 53 BSE HFQ source joins, seven BSE turnover/price conflicts). There were
+no transient access failures in that set. The old split plan was preserved in
+`outputs/phase4_followthrough/20261102/incremental_plan_before.json`; its
+incremental end was advanced to the verified session 2026-10-30 only after
+real-ledger read-only validation showed all 71 persistent failures remain
+deferred under an end-date extension. The existing guardian will read that local
+plan on its next worker; a plan edit alone is not successful download proof.
+Source conflicts require new evidence, not blind retries.
 
 ## Formal baseline: command exists, currently ineligible
 

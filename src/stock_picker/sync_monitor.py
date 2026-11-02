@@ -236,6 +236,68 @@ def daily_update_check(cache_path: Path, session_date: date, *, calendar_evidenc
     return result
 
 
+def observation_decision(update: dict, *, admitted: bool = False,
+                         risk_allowed: bool | None = None,
+                         selection_evaluated: bool = False,
+                         selection=None,
+                         candidate_reserved: bool = False) -> tuple[str, str]:
+    """Classify one close-of-session observation after its caller verifies gates.
+
+    This pure classifier cannot grant admission. The current real-data CLI calls
+    it with admitted=False and never invokes selection or a simulated broker.
+    """
+    if update.get('errors') or update.get('calendar_status') == 'UNKNOWN':
+        return 'DATA_NOT_READY', '交易日或数据检查缺少可核实依据'
+    if update['calendar_status'] == 'NOT_LISTED_IN_COVERED_CALENDAR':
+        return 'NON_TRADING_DAY', '已核实交易日历中无此交易日'
+    if update.get('timing') != 'AFTER_REGULAR_CLOSE':
+        return 'DATA_NOT_READY', '收盘数据尚未到可检查时点'
+    if (update.get('known_active_without_quote') or
+            update.get('sync_target_or_checkpoint_pending') or
+            not update.get('inventory_reconciles') or
+            update.get('unknown_listing_inventory')):
+        return 'DATA_NOT_READY', '股票池或当日行情仍有未核实缺口'
+    if not admitted:
+        return 'DATA_NOT_READY', '全市场及成交模型准入尚未核实'
+    if risk_allowed is None:
+        return 'DATA_NOT_READY', '风控状态尚未从已恢复账户核实'
+    if not risk_allowed:
+        return 'RISK_BLOCKED', '现有风控禁止新增'
+    if not selection_evaluated:
+        return 'DATA_NOT_READY', '选股尚未在已核实数据上执行'
+    if selection is None:
+        return 'ACTIVE_CASH', '已完成选股且没有合格证券'
+    if selection.trading_date.isoformat() != update['requested_session']:
+        raise ValueError('candidate signal date does not match observed session')
+    if not candidate_reserved:
+        return 'DATA_NOT_READY', '唯一候选尚未写入可恢复记录'
+    return 'ONE_CANDIDATE', '本交易日唯一候选'
+
+
+def daily_observation_check(update: dict, *, pilot: dict | None = None) -> dict:
+    """Real-data prerequisite observation; never asserts admission itself."""
+    status, reason = observation_decision(update)
+    return {'schema': 'roviga-daily-observation-v1',
+            'observed_at': update['observed_at'],
+            'signal_date': update['requested_session'],
+            'status': status, 'reason': reason,
+            'candidate': None, 'signal_time': None,
+            'selection_basis': None, 'tracking_record': None,
+            'strategy_evaluated': False, 'risk_evaluated': False,
+            'order_submitted': False, 'formal_gate_verified': False,
+            'data_revision': update.get('data_revision'),
+            'calendar_evidence': update.get('calendar_evidence'),
+            'data_check': {key: update.get(key) for key in (
+                'calendar_status', 'timing', 'inventory_total',
+                'known_active_inventory', 'known_active_with_quote',
+                'sync_target_or_checkpoint_pending', 'inventory_without_sync_status',
+                'latest_any_stored_date', 'sync_state_counts', 'errors')},
+            'known_active_without_quote_count': len(update.get('known_active_without_quote', [])),
+            'pilot_snapshot_id': pilot.get('snapshot_id') if pilot else None,
+            'pilot_requirements_status': pilot.get('requirements_status') if pilot else None,
+            'pilot_evidence_errors': pilot.get('evidence_errors', []) if pilot else []}
+
+
 def pilot_readiness(identity_path: Path, admission_path: Path, *, requirements_path: Path | None = None, now=None) -> dict:
     """Read-only pilot prerequisite check, NOT the operational daily selector.
 

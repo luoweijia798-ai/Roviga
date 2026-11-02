@@ -207,7 +207,7 @@ def main() -> None:
         description="Phase 4 real A-share data sync and foundation backtest"
     )
     parser.add_argument(
-        "command", choices=("sync", "status", "monitor", "audit", "backtest", "readiness", "update-check", "tracking-history")
+        "command", choices=("sync", "status", "monitor", "audit", "backtest", "readiness", "update-check", "tracking-history", "observe")
     )
     parser.add_argument("--provider", choices=("akshare", "tushare"), default="akshare")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
@@ -258,6 +258,29 @@ def main() -> None:
             json.dump(payload,stream,ensure_ascii=False,indent=2)
         print(json.dumps({k:v for k,v in payload.items() if k != 'known_active_without_quote'},ensure_ascii=False,indent=2))
         print('saved=' + str(path.resolve()))
+        return
+
+    if args.command == "observe":
+        import uuid
+        from datetime import datetime, timezone
+        from .sync_monitor import daily_update_check, daily_observation_check, pilot_readiness
+        if (args.snapshot_identity is None) != (args.admission_report is None):
+            parser.error('observe needs both --snapshot-identity and --admission-report')
+        update = daily_update_check(args.cache,args.end,calendar_evidence=args.calendar_evidence)
+        pilot = (pilot_readiness(args.snapshot_identity,args.admission_report,
+                  requirements_path=args.data_requirements)
+                 if args.snapshot_identity else None)
+        observation = daily_observation_check(update,pilot=pilot)
+        args.report.mkdir(parents=True,exist_ok=True)
+        path = args.report / ('observation-' + args.end.isoformat() + '-'
+                + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+                + '-' + uuid.uuid4().hex + '.json')
+        with path.open('x',encoding='utf-8') as stream:
+            json.dump(observation,stream,ensure_ascii=False,indent=2)
+        print(json.dumps({'status':observation['status'],'reason':observation['reason'],
+                          'candidate':None,'strategy_evaluated':False,
+                          'data_revision':observation['data_revision'],
+                          'saved':str(path.resolve())},ensure_ascii=False,indent=2))
         return
 
     if args.command == "readiness":

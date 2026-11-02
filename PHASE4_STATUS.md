@@ -1,6 +1,52 @@
 # Phase 4 checkpoint status
 
-Checkpoint date: 2026-10-19
+Checkpoint date: 2026-11-02
+
+## 2026-11-02 continuation in progress
+
+- Began at clean actual HEAD `d2bc9f116dd9f70f5816f04cf2551d97faac180f`.
+  Three-stock candidate revision 6 remains isolated; historical acceptance
+  remains 2015-06-01..2026-09-30. Independent current-day observation check
+  at 15:27 local read the real live SQLite and existing calendar/pilot evidence:
+  `DATA_NOT_READY`, inventory 5,914, revision 109676, latest any quote
+  2026-10-16, no 2026-11-02 quotes, no selector/risk/order/candidate. The
+  real calendar check for Sunday 2026-11-01 returned `NON_TRADING_DAY`.
+- Fresh read-only pilot reconciliation found no new source precision/scope
+  contract. The formal reader still rejects 000034/2015-08-28 (VWAP below low
+  by 0.0000005406 yuan), 000035/2015-07-17 (0.0000004309), and
+  000035/2021-11-12 (0.0000000089). 000033/2015-04-29 remains an original
+  warmup anomaly with no VWAP/volume/amount use in the current scalar previous
+  price path. Three scope intervals contain 4,857 unique rows / 4,854 formal
+  volume inputs. Source units are documented (shares/yuan); historical publisher
+  rounding and same-trade-scope definitions are not. Existing BaoStock raw
+  000034/2015-08-28 OHLC/volume/amount exactly match the Sina candidate, but
+  duplicate aggregate values do not establish either publisher's precision or
+  covered trade range. No Bao original was found for the two 000035 dates.
+  A/B conclusions stand;
+  C fails for each security. No migration or real return run followed.
+- Added an existing-CLI one-shot observation record and explicit status
+  classification, using immutable local inspection output. Synthetic unit
+  checks exercise the future risk-blocked/active-cash/one-candidate distinctions;
+  these states were not asserted for current real data. No status page rebuild
+  or scheduler. **22 targeted / 184 full-suite tests passed.** See
+  `docs/OPERATIONS.md` for the actual command and recovery.
+- At first inspection the existing guardian 12120 was in `retry_wait`, no worker.
+  Current live inventory is 5,843 complete / 71 failed. Exactly 11 are Shanghai/
+  Shenzhen raw-VWAP conflicts, 53 are BSE backup-source HFQ join conflicts and
+  seven are BSE turnover/price-scope conflicts. Temporary access errors: zero;
+  proven permanent no-data: zero. Checkpoints: 69 at 2026-10-12, one at
+  2026-10-02, one at 2026-09-18. All 71 retain source-review-required status.
+  Live rows 11,517,757, latest quote and both benchmarks 2026-10-16, duplicate
+  security/date primary keys zero. Existing audit has not triggered; 13 source
+  rows remain isolated pending their individual evidence review.
+- Found that end-date changes reopened all persistent-error fingerprints.
+  Corrected the existing retry policy so merely extending the date does not
+  re-request the same unresolved interval. Read-only real-ledger check: all
+  71/71 remain deferred for target 2026-10-30. Targeted synthetic regressions
+  verify changed identity/source or resolved evidence can reopen review.
+  Preserved the old ignored local plan and advanced only the October incremental
+  target from 2026-10-16 to **2026-10-30**. The guardian remains running;
+  actual new download progress must be established from its next worker log.
 
 ## Continued execution after bd1308e: dependencies, ingestion and recovery
 

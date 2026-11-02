@@ -6,7 +6,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from stock_picker.phase4_acceptance import freeze_database
 from stock_picker.real_market import SQLiteMarketCache
-from stock_picker.sync_monitor import daily_update_check
+from stock_picker.sync_monitor import daily_update_check, observation_decision, daily_observation_check
+from stock_picker.models import Selection
 
 
 class DailyUpdateCheckTests(unittest.TestCase):
@@ -67,6 +68,36 @@ class DailyUpdateCheckTests(unittest.TestCase):
 
     def test_timezone_is_mandatory(self):
         with self.assertRaises(ValueError):self.check(now=datetime(2026,10,19))
+
+    def test_observation_statuses_do_not_confuse_missing_data_with_cash_or_risk(self):
+        missing=self.check()
+        self.assertEqual(observation_decision(missing)[0],'DATA_NOT_READY')
+        observation=daily_observation_check(missing)
+        self.assertIsNone(observation['candidate'])
+        self.assertFalse(observation['strategy_evaluated'])
+        self.assertEqual(observation_decision(self.check(date(2026,10,18)))[0],
+                         'NON_TRADING_DAY')
+        ready={**missing,'known_active_without_quote':[],
+               'sync_target_or_checkpoint_pending':0,'unknown_listing_inventory':0}
+        self.assertEqual(observation_decision(ready)[0],'DATA_NOT_READY')
+        self.assertEqual(observation_decision(ready,admitted=True)[0],'DATA_NOT_READY')
+        self.assertEqual(observation_decision(ready,admitted=True,risk_allowed=False)[0],
+                         'RISK_BLOCKED')
+        self.assertEqual(observation_decision(ready,admitted=True,risk_allowed=True)[0],
+                         'DATA_NOT_READY')
+        self.assertEqual(observation_decision(ready,admitted=True,risk_allowed=True,
+                                              selection_evaluated=True)[0],'ACTIVE_CASH')
+        selected=Selection(date(2026,10,19),'TEST_ONLY',1.,1.,1.)
+        self.assertEqual(observation_decision(ready,admitted=True,risk_allowed=True,
+                                              selection_evaluated=True,selection=selected)[0],
+                         'DATA_NOT_READY')
+        self.assertEqual(observation_decision(ready,admitted=True,risk_allowed=True,
+                                              selection_evaluated=True,selection=selected,
+                                              candidate_reserved=True)[0],'ONE_CANDIDATE')
+        with self.assertRaisesRegex(ValueError,'signal date'):
+            observation_decision(ready,admitted=True,risk_allowed=True,
+                selection_evaluated=True,candidate_reserved=True,
+                selection=Selection(date(2026,10,16),'TEST_ONLY',1.,1.,1.))
 
 
 if __name__ == '__main__':unittest.main()
